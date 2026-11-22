@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -186,8 +186,12 @@ it does not know in advance, holding one chunk in memory. A reader decrypts any 
 fetching only the chunks that cover it.</p>
 <p>Streaming fits files, uploads, backups and other objects in a store that serves <code>Range</code> requests.
 Fields of a record are <code>Encrypted</code> values, see <a href="./stored-values.html">Stored values</a>.</p>
-<p>The value comes in three forms, which differ in the bytes in front of the Cobblestone message: the
-salt, the key commitment and the chunks that every form shares, see <a href="#format">Format</a>.</p>
+<p>This page specifies the streaming calls. To store uploads and serve byte ranges of them, read
+<a href="./use-cases/large-files.html">Store customer uploads and serve byte ranges</a> first. To encrypt an HTTP
+body as it streams, read <a href="./use-cases/encrypted-http-streams.html">Send a large export over HTTP, encrypted</a>.</p>
+<p>The value comes in three forms, which differ in the bytes in front of the Cobblestone message. That
+message is the salt, the key commitment and the chunks that every form shares, in the chunked
+encryption format that C2SP specifies, see <a href="#format">Format</a>.</p>
 <ul>
 <li>the prefixed form starts with Tink’s output prefix, <code>0x01</code> and a key id, as every keyring value
 does. <code>AeadCipher::stream_encryptor</code> writes it, and it is the only form a keyring writes and
@@ -197,9 +201,9 @@ decrypts with nothing stored beside it. <code>KmsAeadEnvelope::stream_encryptor<
 <li>the bare form is the Cobblestone message alone, for a caller that keeps the key id or the
 encrypted DEK itself. The <code>_bare</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code> write it.</li>
 </ul>
-<p>Every form uses AES-256-GCM, so the DEK is 32 bytes. The derivation binds the AAD into the value, and
-the decryptor refuses a wrong key, a wrong AAD or a modified header with <code>STREAM_KEY_COMMITMENT</code>
-before it decrypts a chunk.</p>
+<p>Every form uses AES-256-GCM, so the DEK is 32 bytes. The header holds a key commitment: 32 bytes
+derived from the DEK, the salt and the AAD. The decryptor derives it again, and refuses a wrong key,
+a wrong AAD or a modified header with <code>STREAM_KEY_COMMITMENT</code> before it decrypts a chunk.</p>
 <h2 id="encrypting-and-decrypting"><a class="header" href="#encrypting-and-decrypting">Encrypting and decrypting</a></h2>
 <p>A value that arrives as a <code>Stream</code> of <code>Bytes</code>, such as a request body or an object-store download,
 goes through two types that need no bridge to tokio’s I/O traits, and comes back out as a <code>Stream</code>.
@@ -217,14 +221,18 @@ source is <code>STREAM_IO</code>. A source that is not <code>Unpin</code> goes t
 <p>The encryptor and the decryptor come from the cipher: <code>AeadCipher::stream_encryptor</code> and
 <code>stream_decryptor</code> make the prefixed form, <code>stream_encryptor_bare</code> and <code>stream_decryptor_bare</code> the
 bare one. A decryptor is made from the header and the DEK.</p>
-<p>A value read from start to end needs no stored length. Every chunk but the last is 16,400 bytes as
-stored and the last one is shorter, so a chunk is decrypted as soon as 16,400 bytes of it have
-arrived, and the bytes left when the source ends are the final chunk. A value cut at a chunk
-boundary, or less than a tag (16 bytes) into a chunk, ends without that shorter chunk,
-<code>STREAM_LENGTH</code>. A value cut further into a chunk, or followed by more bytes, ends in a final chunk
-that is not authentic, <code>DECRYPT</code>. A ranged read does
-need the stored length: it fetches the chunks of a range without reading what comes before, so only
-the length tells it where the final chunk is and how long it is, see
+<p>A value read from start to end needs no stored length. Every chunk but the last has the same stored
+size, a full chunk with its tag, and the last one is shorter. A chunk is decrypted as soon as a full
+stored chunk has arrived, and the bytes left when the source ends are the final chunk. The sizes are
+in <a href="./formats/streamed-values.html">Streamed values</a>.</p>
+<ul>
+<li>A value cut at a chunk boundary, or less than a tag (16 bytes) into a chunk, ends without that
+shorter chunk, <code>STREAM_LENGTH</code>;</li>
+<li>a value cut further into a chunk, or followed by more bytes, ends in a final chunk that is not
+authentic, <code>DECRYPT</code>.</li>
+</ul>
+<p>A ranged read does need the stored length: it fetches the chunks of a range without reading what
+comes before, so only the length tells it where the final chunk is and how long it is, see
 <a href="#reading-a-range">Reading a range</a>.</p>
 <pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
 </span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher};
@@ -388,14 +396,14 @@ let plaintext: Vec&lt;Bytes&gt; = response.try_collect().await?;
 <span class="boring">assert_eq!(plaintext.concat(), b"a request body");
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>stream_decryptor_bare</code> decrypts the bare form from its 56-byte header and the stored encrypted DEK,
-see <a href="./use-cases/large-files.html#the-dek-beside-the-object">Large files</a>. Full example of reading a
+<p><code>stream_decryptor_bare</code> decrypts the bare form from its header and the stored encrypted DEK, see
+<a href="./use-cases/large-files.html#the-dek-beside-the-object">The DEK beside the object</a>. Full example of reading a
 range from both forms available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/stream_range_read.rs">here</a>.</p>
 <h2 id="with-a-keyring"><a class="header" href="#with-a-keyring">With a keyring</a></h2>
 <p>The <code>stream</code> feature of kms-aead-keyring adds <code>Encryptor::stream_encryptor</code>,
 <code>Keyring::stream_decryptor</code> and, for a value served whole, <code>Keyring::decrypting_stream</code> and
-<code>decrypting_reader</code>, which read the 61-byte header from the front of the source. The first two
+<code>decrypting_reader</code>, which read the header from the front of the source. The first two
 return the same <code>StreamEncryptor</code> and <code>StreamDecryptor</code>, in the prefixed form, under the active
 version for a write and under the version the header names for a read. The keyring applies its
 lifecycle states and its <code>compromised_reads</code> policy as <code>decrypt</code> does, and a <code>FieldAad</code> that carries
@@ -558,21 +566,21 @@ or <code>Mac&lt;T&gt;</code> over a digest of the plaintext, see
 values. A deployment that wants one key per primitive keeps a keyring for streamed values apart
 from the keyring of its fields;</li>
 <li>a sweep re-encrypts a streamed value whole: decrypt it under the version it names and encrypt it
-again under the active one. This release has no helper for that.</li>
+again under the active one. The library has no helper for that.</li>
 </ul>
 <p>The errors a streamed value adds are in <a href="./errors.html#codes">Error handling</a>.</p>
 <h2 id="format"><a class="header" href="#format">Format</a></h2>
 <p>A streamed value is one message of <a href="https://c2sp.org/chunked-encryption">C2SP chunked encryption</a>,
-Cobblestone-256: keys derived with HKDF-SHA-512 and chunks of AES-256-GCM. C2SP is the Community
-Cryptography Specification Project, a home for small specifications that come with test vectors.
-The prefixed form puts Tink’s output prefix, 5 bytes, in front and the envelope form <code>4 + w</code> bytes
-of the encrypted DEK, so an implementation of Cobblestone-256, such as the
+Cobblestone-256: keys derived with HKDF-SHA-512 (the key derivation function built on HMAC) and
+chunks of AES-256-GCM. C2SP is the Community Cryptography Specification Project, a home for small
+specifications that come with test vectors. The prefixed form puts Tink’s output prefix in front
+and the envelope form the encrypted DEK, so an implementation of Cobblestone-256, such as the
 <a href="https://cryptography.io/en/latest/cobblestone/"><code>cryptography.cobblestone</code></a> module of
-pyca/cryptography, decrypts a prefixed value from offset 5 and an envelope-form value from offset
-<code>4 + w</code>, with the DEK. The Go package
-<a href="https://pkg.go.dev/filippo.io/cobblestone">filippo.io/cobblestone</a> implements Cobblestone-128
-only, on AES-128-GCM, and reads none of these values. The bytes, the length rules and the seeking
-rules are in <a href="./formats/streamed-values.html#streamed-values">Formats</a>.</p>
+pyca/cryptography, decrypts a value from the offset where the Cobblestone message starts, with the
+DEK. The Go package <a href="https://pkg.go.dev/filippo.io/cobblestone">filippo.io/cobblestone</a>
+implements Cobblestone-128 only, on AES-128-GCM, and reads none of these values. The bytes, the
+offsets, the length rules and the seeking rules are in
+<a href="./formats/streamed-values.html#streamed-values">Streamed values</a>.</p>
 <p>The library runs the 35 vectors of Project Wycheproof for the specification, in every form, on
 every backend, see
 <a href="https://github.com/C2SP/wycheproof/blob/b61843a9a5115bb758134b6a1f5d5e502d445342/testvectors_v1/c2sp_chunked_encryption_aes_256_gcm_test.json"><code>c2sp_chunked_encryption_aes_256_gcm_test.json</code></a>.</p>

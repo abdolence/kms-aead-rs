@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -186,6 +186,11 @@ its queries and its write rules. The job runs on a schedule, and again until its
 shows nothing scanned. A run that stops part-way or fails on some records needs no checkpoint: the
 next run’s marker query returns exactly the records it did not write. Retiring the old version is
 a separate step of the administrative job, see <a href="#retiring-the-old-version">Retiring the old version</a>.</p>
+<p>This page covers the mechanism every store shares: the encryption marker, the queries for the
+records behind and under a version, re-encrypting a value, running the job, retiring the old
+version and the trust of re-encrypted values. Read it before the page of your store, which holds
+that store’s schema, queries and example; the rotation procedure that calls a sweep is
+<a href="./rotation.html">Rotate keys and re-encrypt values</a>.</p>
 <h2 id="the-encryption-marker"><a class="header" href="#the-encryption-marker">The encryption marker</a></h2>
 <p>A keyring record counts a re-encryption epoch, which moves on by one with every administrative write
 that makes a version active:</p>
@@ -205,12 +210,11 @@ that makes a version active:</p>
 </table>
 </div>
 <p>A write moves the epoch once, however many versions it makes active.
-<code>KeyringRecord::encryption_marker()</code> returns it as an <code>EncryptionMarker</code>:</p>
-<pre><code class="language-text">[0x01][re-encryption epoch: u32 BE]
-</code></pre>
+<code>KeyringRecord::encryption_marker()</code> returns it as an <code>EncryptionMarker</code>, which holds the epoch.</p>
 <p>Markers compare as their epochs do, and so do their bytes, in Firestore, PostgreSQL and BigQuery
-alike. <code>EncryptionMarker::ENVELOPE</code> is epoch 0, <code>01 00 00 00 00</code>, the marker of a record of envelope
-values, below the marker of every keyring.</p>
+alike, see <a href="../formats/keyring-records.html#encryption-markers">Encryption markers</a> for the bytes.
+<code>EncryptionMarker::ENVELOPE</code> is epoch 0, the marker of a record of envelope values, below the
+marker of every keyring.</p>
 <p>Each record of the application keeps the marker in one field beside its encrypted fields. A write
 that touches any encrypted field of a record takes one <code>Encryptor</code> from <code>keyring.encryptor()</code>,
 encrypts all of the record’s encrypted fields again through it, computes its beacons again, and
@@ -234,7 +238,7 @@ column that a range query can use, and the column answers two questions:</p>
 in the <code>ReencryptRange</code> of the version. A query that returns nothing makes the destroy safe.</li>
 </ul>
 <p>The marker is an epoch and not a key version because the fields of a row are under different
-purposes, randomised, deterministic and beacon, and the versions of each purpose rotate
+purposes, such as randomised, deterministic and beacon, and the versions of each purpose rotate
 independently. A version marker would need a column per purpose. The epoch is one counter that the
 keyring moves on whenever any version becomes active. An <code>Encryptor</code> is a snapshot of all active
 versions at one epoch, and each version records the epochs it was active in, so both questions are
@@ -321,14 +325,18 @@ record, and an encryptor taken before a <code>mark_compromised</code> would othe
 compromised version. The re-encryption fails with <code>KeyringError::EncryptorOutdated</code>, after reloading
 the cached record when it lacks the version or holds it as pending, under the same rate limit as
 <code>decrypt</code>’s reload for a key id it lacks. The encryptor keeps its own record, so that its marker
-still names every version the write encrypts under. The write is safe to retry: it takes a new
-encryptor and runs again, and the new encryptor, taken from the reloaded record, finds the value
-current or encrypts it under its active version. Inside <code>reload_min_interval</code> of another such reload
-the cached record may not have moved yet, and the retry fails the same way until it does. When the
-store’s record itself holds the version as pending, as for a value from another keyring whose key id
-is pending here or after a restore from an older backup, every retry fails with
-<code>ENCRYPTOR_OUTDATED</code>, at no more than one store read per <code>reload_min_interval</code>. A key id the
-reloaded record lacks too fails with <code>KeyVersionUnknown</code>.</p>
+still names every version the write encrypts under.</p>
+<p>How such a failure ends:</p>
+<ul>
+<li>the write is safe to retry: it takes a new encryptor from the reloaded record, which finds the
+value current or encrypts it under its active version;</li>
+<li>inside <code>reload_min_interval</code> of another such reload the cached record may not have moved yet,
+and the retry fails the same way until it does;</li>
+<li>when the store’s record itself holds the version as pending, as for a value from another keyring
+whose key id is pending here or after a restore from an older backup, every retry fails with
+<code>ENCRYPTOR_OUTDATED</code>, at no more than one store read per <code>reload_min_interval</code>;</li>
+<li>a key id the reloaded record lacks too fails with <code>KeyVersionUnknown</code>.</li>
+</ul>
 <p>A beacon cannot be re-encrypted: it is a MAC of the plaintext.
 <code>encryptor.is_current(beacon.key_id())</code> applies the same rule to it: <code>true</code> under the active beacon
 version of the encryptor’s record, and the beacon stays as it is; <code>false</code> under an older one, and
@@ -472,18 +480,30 @@ println!("{report:?}");
 </span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>reencrypted</code>, <code>skipped</code> or
-<code>failed</code>. A candidate the stream returns as an error is counted in <code>scanned</code> and <code>failed</code>, and
-logged at <code>WARN</code> with the error’s <code>Display</code>; a stream whose query cannot go on returns its error and
-ends. A re-encryption that fails does not stop the sweep either: it is counted in <code>failed</code> and
-logged at <code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code>. A re-encryption that
-fails with <code>EncryptorOutdated</code> is one of them: a process with a newer record rewrote the record
-after the query returned it. The record is counted as failed, and the next run’s query no longer
+<p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once more in <code>reencrypted</code>,
+<code>skipped</code> or <code>failed</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Outcome</th><th>Counted in</th><th>Logged</th></tr>
+</thead>
+<tbody>
+<tr><td>The re-encryption wrote the record</td><td><code>reencrypted</code>, and <code>reencrypted_from_compromised</code> when the value was under a compromised version</td><td>not logged</td></tr>
+<tr><td>The record needed nothing, or changed after it was read</td><td><code>skipped</code></td><td>not logged</td></tr>
+<tr><td>The re-encryption failed</td><td><code>failed</code></td><td><code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code></td></tr>
+<tr><td>The stream returned the candidate as an error</td><td><code>failed</code></td><td><code>WARN</code> with the error’s <code>Display</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A failure does not stop the sweep. A stream whose query cannot go on returns its error and ends. A
+re-encryption that fails with <code>EncryptorOutdated</code> is a failure of the second row: a process with a
+newer record rewrote the record after the query returned it, and the next run’s query no longer
 returns it, because the process that encrypted it stamped a newer marker. A value under a version
-the store’s record itself holds as pending, such as a value from another keyring whose key id is
-pending here, fails in every run instead. A candidate is the application’s own type, such as a
-record id, a struct of key columns or the record itself, and its <code>Display</code> names the record and
-nothing else. A record id is often an entity id, so read the sweep’s log as an administrative log.</p>
+the store’s record itself holds as pending fails in every run instead, see above. The events are in
+<a href="../observability/spans-and-events.html#keyring-events">Keyring events</a>.</p>
+<p>A candidate is the application’s own type, such as a record id, a struct of key columns or the
+record itself, and its <code>Display</code> names the record and nothing else. A record id is often an entity
+id, so read the sweep’s log as an administrative log.</p>
 <p>The stream returns <code>Result&lt;T, E&gt;</code> and the re-encryption <code>Result&lt;ReencryptOutcome, E&gt;</code>, with the
 application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it
 return a <code>KeyringError</code>, and a <code>From</code> impl on the application’s error lets <code>?</code> convert it, as the
@@ -499,7 +519,8 @@ destroys it, on its <code>KeyringAdmin</code>:</p>
 <ol>
 <li>wait, from the promotion, the longest time any process may run without a successful refresh of
 its record, see <a href="../keyring/lifecycle.html#staged-rotation">Staged rotation</a>, and check that no
-process logged “The keyring record could not be revalidated” meanwhile. Until then a process
+process logged a failed revalidation meanwhile, see
+<a href="../observability/spans-and-events.html#keyring-events">Keyring events</a>. Until then a process
 on the old record encrypts under the old version and stamps the old epoch, see
 <a href="#finding-records-behind">Finding records behind</a>;</li>
 <li>run the sweep until a run reports nothing scanned and nothing failed;</li>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,8 +179,9 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="values-and-deks"><a class="header" href="#values-and-deks">Values and DEKs</a></h1>
-<p>The bytes of the values an application stores and of the DEKs that go with them. The layouts of
-every kind of value are listed on <a href="../formats.html">Formats</a>.</p>
+<p>This page has the bytes of the values an application stores and of the DEKs that go with them:
+read it to parse, store or interoperate with an <code>Encrypted</code> value, an encrypted DEK or a beacon.
+The layouts of every kind of value are listed on <a href="../formats.html">Formats</a>.</p>
 <h2 id="formats-of-encrypted"><a class="header" href="#formats-of-encrypted">Formats of <code>Encrypted</code></a></h2>
 <p>Every value the library encrypts is an <code>Encrypted&lt;T, F&gt;</code>: the bytes of one layout, named by its
 format <code>F</code> from <code>kms_aead::formats</code>. <code>Encrypted::try_from</code> and <code>Encrypted::try_from_hex_string</code>
@@ -202,13 +203,14 @@ check stored bytes against it:</p>
 <code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
 that decrypts it.</p>
 <p>The check reads the framing only, and whether the bytes are authentic is known when they are
-decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the envelope layout v1 of 0.29 and
-the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
-same type until they are upgraded, see
+decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the legacy envelope layout v1 and
+the legacy length-prefixed envelope, checked by their lengths, so a column decodes its old rows into
+the same type until they are upgraded, see
 <a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>. Without the feature,
-<code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses them in every build. The
-layout of 32-bit targets before 0.24.0 has Tink’s framing, so it reads as an
-<code>Envelope</code> value in every build, and <code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>.</p>
+<code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses them in every build. A legacy layout that early releases wrote on 32-bit
+targets has Tink’s framing, so it reads as an <code>Envelope</code> value in every build, and
+<code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>, see
+<a href="../migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
 <p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
 bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
 the integers, and compact JSON for <code>JsonEncoded&lt;T&gt;</code>. See
@@ -257,8 +259,8 @@ kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK 
 </table>
 </div>
 <p>AES-256-GCM is the default of <code>KmsAeadEnvelope::new</code>, so every Tink implementation reads the
-values of an envelope that names no algorithm. The default of 0.29 and earlier was
-ChaCha20-Poly1305, see <a href="../migrating-from-0.29.html#default-algorithm">Migrating from 0.29</a>.</p>
+values of an envelope that names no algorithm. Legacy values default to ChaCha20-Poly1305, see
+<a href="../migrating-from-0.29.html#default-algorithm">Migrating from 0.29</a>.</p>
 <p>Tink for Python reads a kms-aead value with the key URI of the provider’s key:</p>
 <pre><code class="language-python">from tink import aead
 from tink.integration import gcpkms
@@ -269,9 +271,8 @@ remote = gcpkms.GcpKmsClient(key_uri).get_aead(key_uri)
 envelope = aead.KmsEnvelopeAead(aead.aead_key_templates.AES256_GCM, remote)
 plain_text = envelope.decrypt(value, aad)
 </code></pre>
-<p>Checked on a Cloud KMS key and an AWS KMS key, both ways: AES-128-GCM, AES-256-GCM and
-AES-256-GCM-SIV with Tink 1.16.1 for Python, and ChaCha20-Poly1305 with Tink 1.24.0 for Java on
-the Cloud KMS key. <code>tests/tink_interop.py</code> and <code>examples/tink_interop.rs</code> repeat the Python check.</p>
+<p><code>tests/tink_interop.py</code> and <code>examples/tink_interop.rs</code> run the Python read against a Cloud KMS key
+and an AWS KMS key, for AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV.</p>
 <h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
 <p><code>EncryptedDataEncryptionKey</code> is the bytes the provider returned from an encryption, which are also
 the bytes to store and the bytes it decrypts. Each provider’s bytes name the KEK version that
@@ -294,22 +295,26 @@ encrypted the DEK where the KMS needs one to decrypt:</p>
 </div>
 <p>The Azure layout is the library’s own: Key Vault decrypts only with the key version that encrypted,
 and no Tink client exists for Azure. For the same reason, the Key Vault encrypted DEK is the KMS
-ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialised DEK: AES key
+ciphertext of the raw DEK of 16, 32 or 64 bytes, as the legacy layouts have it, not of the serialised DEK: AES key
 wrap, <code>A128KW</code> to <code>A256KW</code>, takes only multiples of 8 bytes, which no serialised DEK is. The local
 KMS encrypts the DEK with AES-256-GCM under the KEK version, with its header up to the version as
 the AAD, so neither the id nor the version can be changed without the decryption failing.</p>
 <p>The <code>0x02</code> layout is the same for every KMS: a producer holding the public half of an RSA key
 encrypts the DEK in its own process, and the provider of the KMS that holds the private half
-decrypts it. The providers of 0.31 read it beside their own bytes, and no earlier release reads it,
-see <a href="#deks-encrypted-with-a-public-key">DEKs encrypted with a public key</a> and <a href="../asymmetric-kek.html">Asymmetric
-KEKs</a>.</p>
+decrypts it. The providers read it beside their own bytes, and a release that predates asymmetric
+KEKs cannot read it, see <a href="#deks-encrypted-with-a-public-key">DEKs encrypted with a public key</a>,
+<a href="../asymmetric-kek.html">Asymmetric KEKs</a> and
+<a href="../migrating-from-0.30.html#readers-before-producers">Readers before producers</a>.</p>
 <p>Store <code>value()</code> or <code>to_hex_string()</code>, and read them back with <code>EncryptedDataEncryptionKey::from</code>
 or <code>try_from_hex_string</code>. Neither holds the KEK version of <code>kek_version()</code>, see
 <a href="../envelope-encryption.html#storing-encrypted-deks">Storing encrypted DEKs</a>.</p>
 <h2 id="serialised-deks"><a class="header" href="#serialised-deks">Serialised DEKs</a></h2>
 <p>The plaintext a provider encrypts is the DEK serialised as Tink serialises a key, the message of its
 Tink key type with <code>version</code> 0, which protobuf leaves out. The Azure provider encrypts the raw DEK
-instead, see <a href="#encrypted-deks">Encrypted DEKs</a>:</p>
+instead, see <a href="#encrypted-deks">Encrypted DEKs</a>.</p>
+<p>The messages are protobuf. A field starts with a tag byte, the field number shifted left by three
+bits and the wire type 2 of a length-delimited field, so <code>0x12</code> is field 2, <code>0x1a</code> is field 3, and
+the length of the bytes follows:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -327,23 +332,23 @@ instead, see <a href="#encrypted-deks">Encrypted DEKs</a>:</p>
 </table>
 </div>
 <p>A beacon key of HMAC-SHA256 is serialised as <code>[0x1a][0x20][key: 32]</code>, its 32 bytes in
-<code>key_value</code>, field 3, as in Tink’s <code>HmacPrfKey</code> without its parameters: the bytes of a 32-byte
-<code>AesGcmKey</code>. It is encrypted as a DEK is, raw under an Azure key. A MAC key of a keyring is serialised the same
-way, in field 3 and never in field 2, since <code>[0x12][0x40][key: 64]</code> is byte for byte an AES-SIV key,
+<code>key_value</code>, field 3 (tag <code>0x1a</code>), as in Tink’s <code>HmacPrfKey</code> without its parameters: the bytes of a
+32-byte <code>AesGcmKey</code>. It is encrypted as a DEK is, raw under an Azure key. A MAC key of a keyring is
+serialised the same way, in field 3 and never in field 2 (tag <code>0x12</code>), since <code>[0x12][0x40][key: 64]</code> is byte for byte an AES-SIV key,
 see <a href="../signing.html#macs-in-a-keyring">MACs in a keyring</a>.</p>
 <p><code>KmsAeadEnvelope::generate_encrypted_dek</code>, <code>generate_encrypted_deterministic_dek</code> and the
 <code>generate_encrypted_dek</code> of both ciphers and of <code>BeaconMac</code> encrypt their keys the same way. The
 message does not name its type, and AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the
 algorithm of the reader decides how the key is used, as in Tink.</p>
 <p>A decrypted DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
-<code>INVALID_KEY_FORMAT</code>. An encrypted Tink
-keyset decrypts under the same KEK too, and this is what keeps it out of the DEK cache.</p>
+<code>INVALID_KEY_FORMAT</code>. An encrypted Tink keyset decrypts under the same KEK too, and this is what
+keeps it out of the DEK cache.</p>
 <h2 id="deks-encrypted-with-a-public-key"><a class="header" href="#deks-encrypted-with-a-public-key">DEKs encrypted with a public key</a></h2>
 <p>An encrypted DEK that a public key encrypted has one layout for every KMS:</p>
 <pre><code class="language-text">[0x02][a: u8][i: u8][KEK id: i bytes][k: u8][KEK version: k ASCII alphanumerics][RSA block]
 </code></pre>
 <ul>
-<li><code>0x02</code> is the layout. No encrypted DEK of a built-in provider starts with it before 0.31, see
+<li><code>0x02</code> marks the layout. No other encrypted DEK of a built-in provider starts with it, see
 <a href="../formats.html#telling-layouts-apart">Telling layouts apart</a>;</li>
 <li><code>a</code> is the algorithm: <code>0x01</code> for RSA-OAEP with SHA-256 as the OAEP hash and the MGF1 hash, and an
 empty label. A later algorithm is another value;</li>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,8 +179,10 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="streamed-values"><a class="header" href="#streamed-values">Streamed values</a></h1>
-<p>The layouts written by the stream encryptors of kms-aead and kms-aead-keyring, and the arithmetic of
-a range read. The layouts of every kind of value are listed on <a href="../formats.html">Formats</a>.</p>
+<p>This page has the layouts written by the stream encryptors of kms-aead and kms-aead-keyring, and the
+arithmetic of a range read. Read it to parse a streamed value without the library, or to fetch a
+byte range of one from a store. The layouts of every kind of value are listed on
+<a href="../formats.html">Formats</a>.</p>
 <p>A streamed value is a header and chunks. Every length is in bytes and integers are big-endian. The
 prefixed form, the one of <code>AeadCipher::stream_encryptor</code> and of the keyring:</p>
 <pre><code class="language-text">offset          len     field
@@ -191,8 +193,8 @@ prefixed form, the one of <code>AeadCipher::stream_encryptor</code> and of the k
     61       16,400     chunk 0: 16,384 bytes of ciphertext and a 16-byte tag
     61 + k × 16,400     chunk k
 </code></pre>
-<p>The bare form is a Cobblestone-256 message as <a href="https://c2sp.org/chunked-encryption">C2SP chunked encryption</a>
-writes it, with the caller’s AAD as its <em>context</em> and the DEK as its <em>input key</em>:</p>
+<p>The bare form is a Cobblestone-256 message, the chunked AES-256-GCM format with a key commitment
+that <a href="https://c2sp.org/chunked-encryption">C2SP chunked encryption</a> specifies, with the caller’s AAD as its <em>context</em> and the DEK as its <em>input key</em>:</p>
 <pre><code class="language-text">offset          len     field
      0           24     salt
     24           32     key commitment
@@ -227,6 +229,8 @@ which fails the key commitment;</li>
 call names the form.</li>
 </ul>
 <p>The keys come from the DEK <code>K</code> of 32 bytes, the salt and the AAD <code>A</code>:</p>
+<p>HKDF-Expand is the key derivation step of HKDF that turns a pseudorandom key (PRK) into output
+keys, and the DEK is the PRK here:</p>
 <pre><code class="language-text">key || base nonce || commitment = HKDF-Expand(SHA-512, PRK = K,
     info = "c2sp.org/chunked-encryption@v1+" || "AEAD_AES_256_GCM" || 0x00 || salt || A,
     length = 32 + 12 + 32)

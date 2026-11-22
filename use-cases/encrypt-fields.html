@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -192,18 +192,19 @@ see <a href="../intro.html#choosing-a-mode">Choosing a mode</a> and the keyring.
 <tr><th>Values are</th><th>Mode</th><th>See</th></tr>
 </thead>
 <tbody>
-<tr><td>written rarely, such as secrets and configuration</td><td>per-call envelope: a new DEK for every value, one KMS call to encrypt it</td><td><a href="../envelope-encryption.html">Envelope encryption</a></td></tr>
+<tr><td>written rarely, such as secrets and configuration</td><td>per-call envelope</td><td><a href="../envelope-encryption.html">Envelope encryption</a></td></tr>
 <tr><td>written at a high rate, or read repeatedly</td><td>store-less DEK reuse for writes, and a DEK cache for reads</td><td><a href="./fewer-kms-calls.html">Cut KMS calls with a DEK cache and DEK reuse</a></td></tr>
-<tr><td>grouped, such as a file in chunks or a tenant’s rows, with one DEK the application keeps</td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, with the encrypted DEK stored apart</td><td><a href="../envelope-encryption.html#working-with-deks-yourself">Working with DEKs yourself</a></td></tr>
+<tr><td>grouped, such as a file in chunks or a tenant’s rows, with one DEK the application keeps</td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td><td><a href="../envelope-encryption.html#working-with-deks-yourself">Working with DEKs yourself</a></td></tr>
 <tr><td>encrypted with a key the application holds, with no KMS</td><td><code>AeadCipher</code></td><td><a href="../crypto-backends.html#aead-without-a-kms">AEAD without a KMS</a></td></tr>
 </tbody>
 </table>
 </div>
+<p>The modes are compared in <a href="../intro.html#choosing-a-mode">Choosing a mode</a>.</p>
 <h2 id="the-path"><a class="header" href="#the-path">The path</a></h2>
 <ol>
-<li>A provider for the KMS, such as <code>GcpKmsProvider::new(&amp;key_ref)</code>, with the rights of
-<a href="../production/permissions.html#with-kms-aead-alone">KMS rights</a>: decrypt for a reader, encrypt
-too for a writer, see <a href="../providers.html">KMS providers</a>;</li>
+<li>A provider for the KMS, such as <code>GcpKmsProvider::new(&amp;key_ref)</code>, see <a href="../providers.html">KMS providers</a>,
+with the rights of <a href="../production/permissions.html#with-kms-aead-alone">With kms-aead alone</a>:
+decrypt for a reader, and encrypt too for a writer;</li>
 <li><code>KmsAeadEnvelope::new(provider)</code>, or <code>with_options</code> with a <code>DekReusePolicy</code> for store-less DEK
 reuse and a <code>DekCache</code> for repeated reads, see <a href="../dek-caching.html">DEK caching and reuse</a>;</li>
 <li>a newtype per field, such as <code>Email</code>, that implements <code>Plaintext</code>, and normalises the value if
@@ -220,12 +221,14 @@ another row fails to decrypt, see <a href="../envelope-encryption.html#aad">AAD<
 <ul>
 <li>The value does not record its algorithm, so the writer and the reader use the same one, see
 <a href="../envelope-encryption.html">Envelope encryption</a>;</li>
+<li>the AAD is not stored in the value, so every read rebuilds it from the row exactly as the write
+built it, see <a href="../envelope-encryption.html#aad">AAD</a>;</li>
 <li>finding rows by an encrypted field needs a deterministic field or a beacon, see
-<a href="./equality-lookups.html">Find rows by an encrypted value</a>;</li>
+<a href="./equality-lookups.html">Find a user by an encrypted email</a>;</li>
 <li>Tink reads envelope values on Cloud KMS and AWS KMS keys, and BigQuery does not, see
-<a href="./bigquery-and-tink.html">Read values in BigQuery or Tink</a>;</li>
+<a href="./bigquery-and-tink.html">Decrypt columns in BigQuery SQL or with Tink</a>;</li>
 <li>the KEK rotates in the KMS, and the stored DEKs are encrypted again before the old version is
-disabled, see <a href="../production/rotation.html#with-kms-aead-alone">Rotate keys and re-encrypt values</a>;</li>
+disabled, see <a href="../production/rotation.html#with-kms-aead-alone">With kms-aead alone</a>;</li>
 <li>values move to a keyring later with a sweep, see
 <a href="../production/envelope-to-keyring.html">Move envelope values to a keyring</a>.</li>
 </ul>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -185,6 +185,11 @@ with WebCrypto. Beside the signature it offers a MAC, a keyed hash, under a symm
 of a keyring, for integrity inside one trust domain. Signatures are Ed25519 and ECDSA on P-256 with
 SHA-256; MACs are HMAC-SHA256 and HMAC-SHA512. Neither hides the bytes, see
 <a href="./envelope-encryption.html">Envelope encryption</a> for that.</p>
+<p>This page specifies the signing and MAC types and calls. To publish something others verify, read
+<a href="./use-cases/publish-verifiable.html">Publish a rate sheet or a release anyone can verify</a>. To detect
+tampering between your own services, read <a href="./use-cases/service-integrity.html">Detect tampering with jobs and rows between your
+services</a>. To protect the keyring record, read <a href="./production/signed-records.html">Protect the
+keyring record</a>.</p>
 <h2 id="signature-or-mac"><a class="header" href="#signature-or-mac">Signature or MAC</a></h2>
 <div class="table-wrapper">
 <table>
@@ -208,7 +213,8 @@ the store. Be aware a MAC never proves origin to anyone who could not have compu
 <p>A signed value has a payload type and the bytes that stand for it. The payload type is signed
 with the bytes, so a signature over one kind of document never verifies as another kind. The
 library signs the SHA-256 of the payload, so a KMS sees the same few bytes whatever the size of the
-document. Canonicalise a document that may be serialised again before it is signed.</p>
+document. Canonicalise a document that may be serialised again before it is signed: write it in one
+fixed form, so that every serialiser produces the same bytes.</p>
 <p>A serde type implements <code>SignableType</code> to name its payload type, and the call passes it as
 <code>JsonEncoded::new(value)</code>, whose payload is the compact JSON of the value. <code>Signer::sign</code> and
 <code>Verifier::verify_signed</code> take and return the <code>JsonEncoded</code>, and the outer type, <code>Signature</code> or
@@ -269,11 +275,11 @@ assert_eq!(verifier.verify(&amp;forged, &amp;signature).unwrap_err().code(), "SI
 with the signature, as <code>to_payload</code> returned them, rather than rebuilding them from fields: another
 serialiser may order the members or format numbers differently.</p>
 <p>The signing providers sit beside the encryption providers, each in the feature of its KMS and
-named by a key reference that names one key version, never “the latest”: <code>GcpKmsSigningProvider</code>
-(Ed25519 on software keys, P-256 on software and HSM keys), <code>AwsKmsSigningProvider</code> (name the key
-by id or ARN, never by an alias), <code>AzureKmsSigningProvider</code> (P-256 only, since Key Vault signs no
-Ed25519), <code>HcVaultTransitSigningProvider</code> and <code>LocalSigningProvider</code>, in every build. Be aware the
-private key of a <code>LocalSigningProvider</code> is in process memory, with no IAM, no audit log and no HSM.</p>
+named by a key reference that names one key version, never “the latest”: <code>GcpKmsSigningProvider</code>,
+<code>AwsKmsSigningProvider</code>, <code>AzureKmsSigningProvider</code>, <code>HcVaultTransitSigningProvider</code> and
+<code>LocalSigningProvider</code>, in every build. The algorithms and the key reference of each are in the
+Signing section of its page, see <a href="./providers.html">KMS providers</a>. Be aware the private key of a
+<code>LocalSigningProvider</code> is in process memory, with no IAM, no audit log and no HSM.</p>
 <p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/signing.rs">here</a>.</p>
 <h2 id="attached-and-detached"><a class="header" href="#attached-and-detached">Attached and detached</a></h2>
 <p><code>Signer::sign</code> returns a detached <code>Signature&lt;T&gt;</code>, a small value to store beside the bytes, and
@@ -283,7 +289,7 @@ then decodes and returns its payload. MACs have the same pair: a detached <code>
 <code>verify_mac</code> on a keyring, and an attached <code>WithMac&lt;T&gt;</code>, which <code>mac_attached</code> computes and
 <code>verify_with_mac</code> checks before it returns the payload. The four types are stored as <code>Encrypted</code>
 is, with serde, <code>postgres</code> and <code>sqlx</code>, and none implements <code>PartialEq</code>. The bytes are in
-<a href="./formats/signatures-and-macs.html">Formats</a>.</p>
+<a href="./formats/signatures-and-macs.html">Signature and MAC formats</a>.</p>
 <h2 id="another-encoding"><a class="header" href="#another-encoding">Another encoding</a></h2>
 <p>A type whose payload is not JSON implements <code>Signable</code> itself: <code>to_payload</code> returns the bytes that
 are signed, and <code>from_payload</code> decodes the bytes of an attached value after they verified. Both
@@ -370,8 +376,11 @@ assert_eq!(verifying.key_id(), KeyId::new(0x90fa_cafe));
 </span><span class="boring">}</span></code></pre>
 <h2 id="in-a-browser"><a class="header" href="#in-a-browser">In a browser</a></h2>
 <p>A browser verifies a detached signature with WebCrypto: import the keys of the JWK Set, read the
-key id from the signature, hash the payload, build the pre-image and call <code>verify</code>. WebCrypto takes
-the signature as <code>r || s</code> for ECDSA and as the 64 bytes of RFC 8032 for Ed25519, which
+key id from the signature, hash the payload, build the pre-image and call <code>verify</code>. The pre-image
+is the exact bytes a signature covers: the payload type and the payload’s SHA-256 in the DSSE
+pre-authentication encoding (PAE), see <a href="./formats/signatures-and-macs.html">Signature and MAC formats</a>.
+WebCrypto takes the ECDSA signature as <code>r || s</code>, the two 32-byte numbers of the signature written
+one after the other, and the Ed25519 signature as the 64 bytes of RFC 8032, which
 <code>SubtleCrypto.verify</code> supports in Chrome 137, Firefox 129 and Safari 17. P-256 works in every
 engine with WebCrypto.</p>
 <pre><code class="language-javascript">// jwks: the parsed JWK Set; payloadType: the type's payload type string;
@@ -440,7 +449,7 @@ async function keyIdOf(jwk) {
 </code></pre>
 <p>An attached value is split first: <code>w</code> is the big-endian <code>u16</code> at bytes 5 and 6, the signature the
 <code>w</code> bytes after it, and the payload the rest; verify before using the payload. The test vectors of
-<a href="./formats/signatures-and-macs.html#signature-and-mac-test-vectors">Formats</a> run against this code in CI.</p>
+<a href="./formats/signatures-and-macs.html#signature-and-mac-test-vectors">Signature and MAC test vectors</a> run against this code in CI.</p>
 <h2 id="macs-in-a-keyring"><a class="header" href="#macs-in-a-keyring">MACs in a keyring</a></h2>
 <p>A keyring holds MAC key versions beside its other versions, under the purpose <code>Mac</code>: HMAC-SHA256
 keys of 32 bytes or HMAC-SHA512 keys of 64 bytes, encrypted by the KEK as every DEK is, with the
@@ -496,8 +505,10 @@ let verified = keyring.verify_with_mac(&amp;with_mac).await?.0;
 </span><span class="boring">}</span></code></pre>
 <p>A value under a retired version fails with <code>KEY_VERSION_RETIRED</code>, so compute a new MAC over the
 payload under the active version before retiring the old one; sweeps re-encrypt <code>Encrypted</code> fields
-and not MACs. Move every process to 0.31 before the first MAC version is created, since 0.30 refuses
-a record with a MAC version. <code>Authenticator</code> computes and verifies MACs with a key the caller holds.</p>
+and not MACs. A process on a version that predates MACs refuses a record with a MAC version, so
+upgrade every process that reads the keyring before the first MAC version is created, see <a href="./migrating-from-0.30.html#readers-before-producers">Readers
+before producers</a>. <code>Authenticator</code> computes and
+verifies MACs with a key the caller holds.</p>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/mac.rs">here</a>.</p>
 <h3 id="beacons-and-macs"><a class="header" href="#beacons-and-macs">Beacons and MACs</a></h3>
@@ -573,25 +584,9 @@ assert!(admin.keyring().record().signature().is_some());
 </span><span class="boring">}</span></code></pre>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/record_signing.rs">here</a>.
-The signed bytes are in <a href="./formats/signatures-and-macs.html#the-signed-keyring-record">Formats</a>.</p>
-<p>Move an existing deployment in this order:</p>
-<ol>
-<li>move every administrative binary to 0.31, since a 0.30 administrative write removes the
-signature;</li>
-<li>give every registry the signer’s public key as <code>VerifyIfSigned(keys)</code>: unsigned records still
-read, and a signed one verifies from its first write;</li>
-<li>give the administration a signing admin and run <code>sign_record</code> on every keyring;</li>
-<li>switch the applications and the administration to <code>Required</code>;</li>
-<li>rotate the signing key by adding the new public key to every registry’s set first, then
-<code>sign_record</code> on every keyring with the new signer.</li>
-</ol>
-<p>Under <code>VerifyIfSigned</code>, a running process that holds a signed record refuses a later unsigned one
-with <code>RECORD_SIGNATURE_REMOVED</code>, keeps the record it holds and logs an <code>ERROR</code>; a restarted process
-reads whatever the store holds. A store writer who strips the signature therefore downgrades only
-the processes that start after the write. Be aware that <code>Required</code> is the control for those, and
-the only one for a keyring whose record was never signed. To stop signing a keyring on purpose,
-switch every reader to <code>VerifyIfSigned</code>, write the record unsigned with <code>dangerously_unsign_record</code>
-on a <code>NoRecordSigner</code> admin, then restart the readers.</p>
+The signed bytes are in <a href="./formats/signatures-and-macs.html#the-signed-keyring-record">The signed keyring record</a>.</p>
+<p>Moving an existing deployment to signed records, rotating the signing key, what only <code>Required</code>
+closes and stopping signing are in <a href="./production/signed-records.html">Protect the keyring record</a>.</p>
 <h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
 <ul>
 <li>whoever may sign records may write any record, and a signature proves the record was written by a
@@ -600,8 +595,9 @@ running processes refuse when it moves a version backwards;</li>
 <li>a signature is valid for as long as its key is in the verifier’s set. There is no expiry and no
 revocation list, so put a timestamp or a recipient in the payload: nothing outside the payload
 type and the payload is authenticated;</li>
-<li>ECDSA signatures are malleable. Never use signature bytes as an identifier or compare them for
-equality; Ed25519 signatures are unique for a key and a message;</li>
+<li>ECDSA signatures are malleable: a third party can turn a valid signature into another valid one
+for the same message. Never use signature bytes as an identifier or compare them for equality;
+Ed25519 signatures are unique for a key and a message;</li>
 <li>a MAC is forged by every holder of its key, which is every process with KMS decrypt on the
 keyring’s KEK and read access to its record;</li>
 <li>the library does not sign the public key set. How it reaches a verifier is the deployment’s

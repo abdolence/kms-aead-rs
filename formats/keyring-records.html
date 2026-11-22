@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,9 +179,10 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="keyring-records-and-keysets"><a class="header" href="#keyring-records-and-keysets">Keyring records and keysets</a></h1>
-<p>The key ids, the stored record and the encryption markers of kms-aead-keyring, and the Tink keysets
-that carry keys to Tink and BigQuery. The layouts of every kind of value are listed on
-<a href="../formats.html">Formats</a>.</p>
+<p>This page has the key ids, the stored record and the encryption markers of kms-aead-keyring, and
+the Tink keysets that carry keys to Tink and BigQuery. Read it to write a keyring store, to
+read a record outside the library, or to query encryption markers. The layouts of every kind of
+value are listed on <a href="../formats.html">Formats</a>.</p>
 <h2 id="tink-keysets-and-the-tink-prefix"><a class="header" href="#tink-keysets-and-the-tink-prefix">Tink keysets and the TINK prefix</a></h2>
 <p>Two items describe the TINK-prefixed values:</p>
 <ul>
@@ -316,7 +317,7 @@ version’s purpose;</li>
 <li><code>signature</code> is an optional top-level member, absent from the record above:
 <code>"signature": "&lt;standard base64 of the detached Signature bytes&gt;"</code>, written where the
 administration signs its records, see
-<a href="./signatures-and-macs.html#the-signed-keyring-record">The signed keyring record</a>. A reader of 0.30 ignores it;</li>
+<a href="./signatures-and-macs.html#the-signed-keyring-record">The signed keyring record</a>. A reader that predates record signing ignores it;</li>
 <li><code>seal_epoch</code> is the record’s re-encryption epoch: it counts the writes that made a version active,
 from 1 at the creation, see <a href="#encryption-markers">Encryption markers</a>;</li>
 <li><code>versions</code> holds every version ever created, in creation order, each under its

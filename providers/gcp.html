@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -183,8 +183,12 @@
 <a href="../features.html">Cargo features</a>.</p>
 <p><code>GcpKmsKeyRef</code> names a CryptoKey by its project, location, key ring and key. The provider encrypts
 under the primary version of the key, and each encrypted DEK records the version that encrypted it,
-so DEKs encrypted before a rotation still decrypt afterwards. How the KMS providers compare is in
-<a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</p>
+so DEKs encrypted before a rotation still decrypt afterwards.</p>
+<p>This page specifies <code>GcpKmsProvider</code>. To compare it with the other KMS providers, read <a href="../getting-started/choosing.html#kms-providers">Choose a
+provider and a backend</a>. For the rights the
+applications and the administration need, read <a href="../production/permissions.html">Permissions: applications and
+administration</a>. For rotating the KEK, read <a href="../production/rotation.html">Rotate keys and
+re-encrypt values</a>.</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider, GcpKmsProviderOptions};
 use kms_aead::KmsAeadEnvelope;
@@ -249,14 +253,14 @@ decryptions under it fail, and enabling it again restores them. Destroying it sc
 destruction, 30 days later by default, and until then the version can be restored.</p>
 <p>Changing the primary version and disabling a version are eventually consistent in Cloud KMS, see
 <a href="https://docs.cloud.google.com/kms/docs/consistency">Cloud KMS resource consistency</a>. Until a new
-primary version has propagated, <code>Encrypt</code> may still use the previous one, and a disabled version
+primary version has propagated, <code>Encrypt</code> may still use the previous one. A disabled version
 “typically remains usable for encrypting and decrypting data for up to 1 minute after it is
-disabled”, for several hours in exceptional cases. So:</p>
+disabled”, and for several hours in exceptional cases. So:</p>
 <ul>
 <li>start the sweep only once the new primary version has propagated. The <code>kek_version()</code> of the
 encrypted DEK an encryption returns, and the <code>kek_version</code> field of the <code>KMS encrypt DEK</code> span,
 name the version Cloud KMS encrypted with, the <code>N</code> of <code>cryptoKeyVersions/N</code>, see
-<a href="../observability/spans-and-events.html">Observability</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
+<a href="../observability/spans-and-events.html">Spans and events</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
 primary version had propagated still lists the old version among its <code>kek_versions_in_use</code>:
 run <code>reencrypt_deks</code> again, see <a href="../production/rotation.html#re-encrypting-a-keyrings-deks">Re-encrypting a keyring’s DEKs</a>;</li>
 <li>run the check only once the disable has propagated, and run it again before destroying the
@@ -283,8 +287,9 @@ fails with <code>ASYMMETRIC_KEK_PUBLIC_KEY</code> for a version whose algorithm 
 <code>RSA_DECRYPT_OAEP_2048_SHA256</code>, <code>RSA_DECRYPT_OAEP_3072_SHA256</code> or <code>RSA_DECRYPT_OAEP_4096_SHA256</code>;</li>
 <li>a decryption of a <code>0x02</code> encrypted DEK sends <code>AsymmetricDecrypt</code> on
 <code>&lt;key&gt;/cryptoKeyVersions/&lt;version&gt;</code>, with the RSA block as <code>ciphertext</code>. The encrypted DEK names
-the version, as a symmetric ciphertext does. The request carries no CRC32C checksum fields: a
-corrupted DEK fails the value’s AEAD;</li>
+the version, as a symmetric ciphertext does. The request carries no CRC32C checksum fields (CRC32C is the 32-bit
+checksum with which Cloud KMS detects corruption in transit): a corrupted DEK fails the value’s
+AEAD;</li>
 <li>the principal of a reader needs <code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in
 <code>roles/cloudkms.cryptoKeyDecrypter</code>, and the administration also
 <code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code>. Nobody needs
@@ -328,12 +333,12 @@ a client the application built itself. Creating the provider sends no request; <
 the first one. Cloud KMS lists <code>EC_SIGN_ED25519</code> under the software protection level only, so a key
 at the HSM protection level signs with P-256.</p>
 <ul>
-<li><code>sign</code> sends <code>AsymmetricSign</code> with the pre-image as <code>data</code> for Ed25519, and the SHA-256 of the
+<li><code>sign</code> sends <code>AsymmetricSign</code> with the pre-image (the exact bytes a signature covers, see <a href="../formats/signatures-and-macs.html">Signature and MAC formats</a>) as <code>data</code> for Ed25519, and the SHA-256 of the
 pre-image as <code>digest.sha256</code> for P-256. Each carries its CRC32C checksum, <code>dataCrc32c</code> or
 <code>digestCrc32c</code>;</li>
 <li>a response fails with <code>SIGNATURE_ENCODING</code> when <code>verifiedDataCrc32c</code> or <code>verifiedDigestCrc32c</code> is
 false, when <code>signatureCrc32c</code> is missing or does not match the signature, or when the signature
-is not 64 bytes (Ed25519) or strict DER (P-256), which is converted to <code>r || s</code>. A <code>name</code> other
+is not 64 bytes (Ed25519) or strict DER (P-256), which is converted to <code>r || s</code> (the two 32-byte integers of an ECDSA signature, one after the other). A <code>name</code> other
 than the configured version fails with <code>SIGNING_KEY_MISMATCH</code>;</li>
 <li><code>verifying_key</code> sends <code>GetPublicKey</code> and parses <code>pem</code>. A key of another <code>algorithm</code> than the
 configured one fails with <code>SIGNING_ALGORITHM_MISMATCH</code>, and a <code>pem</code> that does not parse with

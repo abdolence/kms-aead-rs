@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -184,8 +184,7 @@ sender cut the body short, a proxy answered with an HTML page, a field changed i
 line that explains the failure needs the payload, and the payload holds emails, phone numbers and
 amounts that a log must not keep. <code>RedactedJson</code> writes an outline of the bytes instead: the shape
 of the JSON, with every value hidden unless the application opts into showing it. It does no
-encryption and needs no KMS, so it works for any bytes and any logger. <code>kms-aead</code> builds without
-features for it, which is the default.</p>
+encryption and needs no KMS, so it works for any bytes and any logger. It needs no Cargo feature.</p>
 <h2 id="outline-instead-of-the-payload"><a class="header" href="#outline-instead-of-the-payload">Outline instead of the payload</a></h2>
 <p><code>RedactedJson::new::&lt;P&gt;(bytes)</code> takes the bytes and a policy <code>P</code>, a type that says what the outline
 shows. <code>ShapeOnly</code> shows nothing but the shape. <code>Display</code> and <code>Debug</code> both write the outline and never
@@ -258,7 +257,7 @@ length, and it narrows a short string down. Leave it off for any payload where t
 </ul>
 <p><code>JsonEncoded&lt;T, P&gt;</code> applies the same policies to the JSON that fails to decode after an encrypted
 value is opened, see <a href="../stored-values.html#json-that-does-not-decode">JSON that does not decode</a>. The
-event it logs is in <a href="../observability/spans-and-events.html#json-that-does-not-decode">Observability</a>.</p>
+event it logs is in <a href="../observability/spans-and-events.html#json-that-does-not-decode">Spans and events</a>.</p>
 
                     </main>
 

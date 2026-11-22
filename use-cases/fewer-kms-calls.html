@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -226,15 +226,14 @@ assert_eq!(first, second);
 as well.</p>
 <h3 id="choosing-the-ttl-and-the-size"><a class="header" href="#choosing-the-ttl-and-the-size">Choosing the TTL and the size</a></h3>
 <ul>
-<li>A cache serves an entry for its TTL after it was inserted, 15 minutes by default. A longer TTL
-saves more KMS calls, and keeps DEKs in memory for longer and delays the effect of a revoked KMS
-permission;</li>
-<li><code>max_entries</code> is 1024 by default, and past it the cache evicts the oldest entry. Set it above the
-number of distinct DEKs read per TTL, otherwise reads evict each other’s keys and the KMS is
-called again;</li>
+<li>A cache serves an entry for its TTL after it was inserted. A longer TTL saves more KMS calls,
+keeps DEKs in memory for longer and delays the effect of a revoked KMS permission;</li>
+<li>past <code>max_entries</code> the cache evicts the oldest entry. Set it above the number of distinct DEKs
+read per TTL, otherwise reads evict each other’s keys and the KMS is called again;</li>
 <li>with per-call envelopes every value has its own DEK, so the cache helps only values read more
 than once within the TTL. A value read once is one KMS call with or without it.</li>
 </ul>
+<p>The defaults of the TTL and of <code>max_entries</code> are in <a href="../dek-caching.html#dek-cache">DEK cache</a>.</p>
 <p>As an example, a service reads 100 values a second, drawn from 2,000 distinct values, each with its
 own DEK. Without a cache that is 100 × 3,600 = 360,000 KMS decryptions an hour. With a cache of
 <code>max_entries</code> 4,096 and the default TTL of 15 minutes, each DEK is decrypted at most once per TTL,
@@ -259,6 +258,8 @@ use std::time::Duration;
     provider,
     KmsAeadEnvelopeOptions::new().with_dek_reuse(
         DekReusePolicy::new()
+            // The envelope's DEK cache drops the DEK after its TTL, 15 minutes by default, and the
+            // next write renews it, so `max_age` decides only when the cache's TTL is longer
             .with_max_age(Duration::from_secs(60 * 60))
             .with_max_uses(NonZeroU64::new(1_000_000).expect("not zero")),
     ),
@@ -281,11 +282,11 @@ assert_eq!(decrypted_second, SecretValue::from("second"));
 earlier DEKs stay readable. Readers need no policy: any envelope over the same KEK decrypts them,
 and a reader with a <code>DekCache</code> calls the KMS once per DEK and TTL, as in the previous section.</p>
 <p>As an example, a writer encrypts 1,000 values a second. With one DEK per value that is 3,600,000 KMS
-encryptions an hour. A store-less envelope keeps its DEK in a cache that has a TTL of 15 minutes
-by default, and renews the DEK when the cache drops it, so this writer renews it every 15 minutes,
-before <code>max_uses</code> of 1,000,000 values or <code>max_age</code> of an hour is reached: 4 KMS encryptions an hour
-for the process. To renew by <code>max_age</code> instead, give the envelope a <code>DekCache</code> whose TTL is longer
-than it.</p>
+encryptions an hour. A store-less envelope keeps its DEK in a cache and renews the DEK when the
+cache drops it. With the default TTL of 15 minutes this writer renews it every 15 minutes, before
+<code>max_uses</code> of 1,000,000 values or <code>max_age</code> of an hour is reached: 4 KMS encryptions an hour for
+the process. To renew by <code>max_age</code> instead, give the envelope a <code>DekCache</code> whose TTL is longer than
+it.</p>
 <h2 id="with-a-keyring"><a class="header" href="#with-a-keyring">With a keyring</a></h2>
 <p>A keyring needs no policy: its values carry a 4-byte key id instead of an encrypted DEK, so a write
 calls no KMS, and a read decrypts each key version’s DEK once per DEK cache TTL.

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -272,7 +272,7 @@ record, see <a href="../keyring/lifecycle.html#staged-rotation">Staged rotation<
 <li><strong>a retire too early</strong> refuses a value the sweep missed, see
 <a href="./sweeps.html#retiring-the-old-version">Retiring the old version</a>;</li>
 <li><strong>a stale keyset</strong> misses the values under the new version in SQL, see
-<a href="../use-cases/bigquery-and-tink.html#with-a-keyring">Read values in BigQuery or Tink</a>;</li>
+<a href="../use-cases/bigquery-and-tink.html#with-a-keyring">Decrypt columns in BigQuery SQL or with Tink</a>;</li>
 <li><strong>a destroy</strong> is final, apart from the copies of the DEK that backups of the record and earlier
 keyset exports keep, see <a href="../use-cases/erase-a-tenant.html#what-survives-a-shred">What survives a shred</a>.</li>
 </ul>
@@ -307,11 +307,11 @@ that is not re-encrypted keeps working as long as the old KEK versions stay enab
 encrypts a DEK.</p>
 <p>The record keeps the KEK version of each encrypted DEK, as the KMS reported it when it encrypted the
 DEK: <code>KeyVersion::kek_version</code>. <code>reencrypt_deks</code> returns one <code>DekReencryption</code> per version, with the
-KEK version its DEK was under and the one the KMS encrypted it with now, and <code>kek_versions_in_use</code>
+KEK version its DEK was under before and the one it is under after the call, and <code>kek_versions_in_use</code>
 of the record lists every KEK version the record’s DEKs are under. Before the old KEK version is
 disabled, the record that <code>Keyring::reload</code> returns must list the new version alone, which needs no
 KMS call. Once the old version is disabled, <code>reencrypt_deks</code> runs again: it decrypts every DEK
-through the KMS and fails on one the KMS no longer decrypts. Here with the local KMS, rotated from
+through the KMS and fails on one the KMS does not decrypt. Here with the local KMS, rotated from
 version 1 to version 2, where dropping version 1 from the provider stands for disabling it:</p>
 <pre><code class="language-rust">use std::num::NonZeroU32;
 
@@ -354,7 +354,7 @@ let rotated = LocalKmsProvider::&lt;Ring&gt;::new(
 )?;
 let admin = registry.admin(rotated, TENANT).await?;
 
-// One entry per version: the KEK version its DEK was under, and the one it is under now
+// One entry per version: the KEK version its DEK was under before the call, and the one it is under after it
 let moved: Vec&lt;DekReencryption&gt; = admin.reencrypt_deks().await?;
 let new_kek_version = KmsKeyVersion::from(v2);
 assert!(moved
@@ -374,7 +374,7 @@ registry.admin(disabled, TENANT).await?.reencrypt_deks().await?;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>Under Cloud KMS, a <code>reencrypt_deks</code> that ran before the new primary version had propagated reports
-the old version as the one the DEK is under now, and the record keeps listing it: run
+the old version as the one the DEK is under after the call, and the record keeps listing it: run
 <code>reencrypt_deks</code> again once the rotation has propagated. Under Vault Transit,
 <code>min_decryption_version</code> disables every version below it at once, which is why the check asks for
 the new version alone.</p>

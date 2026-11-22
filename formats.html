@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -180,7 +180,8 @@
                     <main>
                         <h1 id="formats"><a class="header" href="#formats">Formats</a></h1>
 <p>Every byte layout the library reads or writes is listed on this page and described on the pages
-below it:</p>
+below it. Read it to find the layout of a stored value, to tell two layouts apart, or to decide
+which pages to read to parse a value outside the library:</p>
 <ul>
 <li><a href="./formats/values.html">Values and DEKs</a>: <code>Encrypted&lt;T, F&gt;</code> and its formats, Tink’s KMS envelope,
 encrypted DEKs and the serialised DEKs inside them, DEKs encrypted with a public key, and
@@ -198,35 +199,34 @@ algorithm, and a value Tink encrypts decrypts with <code>KmsAeadEnvelope::decryp
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Layout</th><th>Type</th><th>Bytes</th><th>Read by</th><th>Written by</th></tr>
+<tr><th>Layout</th><th>Type</th><th>Bytes</th><th>Read by</th><th>Status</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="./formats/values.html#tinks-kms-envelope">Tink KMS envelope</a></td><td><code>Encrypted&lt;T, Envelope&gt;</code></td><td><code>[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
-<tr><td><a href="./formats/values.html#formats-of-encrypted">Bare value</a></td><td><code>Encrypted&lt;T, Bare&gt;</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>every release</td></tr>
-<tr><td><a href="./formats/values.html#encrypted-deks">Encrypted DEK</a></td><td><code>EncryptedDataEncryptionKey</code></td><td>the provider’s bytes</td><td>kms-aead, Tink for GCP and AWS keys</td><td>0.30.0 and later</td></tr>
-<tr><td><a href="./formats/values.html#serialised-deks">Serialised DEK</a></td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message</td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
-<tr><td><a href="./formats/values.html#formats-of-encrypted">TINK-prefixed value</a></td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td><a href="./formats/streamed-values.html">Streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>AeadCipher::stream_encryptor</code> and <code>stream_decryptor</code>, and of the keyring’s <code>Encryptor::stream_encryptor</code> and <code>Keyring::stream_decryptor</code></td><td>see its page</td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte 5</td><td>0.31.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td><a href="./formats/streamed-values.html">Envelope streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>KmsAeadEnvelope::stream_encryptor</code> and <code>stream_decryptor</code></td><td>see its page</td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte <code>4 + w</code></td><td>0.31.0 and later</td></tr>
-<tr><td><a href="./formats/streamed-values.html">Bare streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of the <code>stream_encryptor_bare</code> and <code>stream_decryptor_bare</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code></td><td>see its page</td><td>kms-aead with <code>stream</code>, any C2SP chunked-encryption reader</td><td>0.31.0 and later</td></tr>
-<tr><td><a href="./formats/signatures-and-macs.html">Detached signature</a></td><td><code>Signature&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][signature]</code></td><td>kms-aead</td><td>0.31.0 and later</td></tr>
-<tr><td><a href="./formats/signatures-and-macs.html">Attached signature</a></td><td><code>Signed&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][signature: w][payload]</code></td><td>kms-aead</td><td>0.31.0 and later</td></tr>
-<tr><td><a href="./formats/signatures-and-macs.html">Detached MAC</a></td><td><code>Mac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][tag]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>0.31.0 and later</td></tr>
-<tr><td><a href="./formats/signatures-and-macs.html">Attached MAC</a></td><td><code>WithMac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>0.31.0 and later</td></tr>
-<tr><td><a href="./formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink keyset</a></td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td><a href="./formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink encrypted keyset</a></td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
-<tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
-<tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets before 0.24.0</td><td>kms-aead with <code>legacy-formats</code></td><td>0.8.0 to 0.28.1</td></tr>
-<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead with <code>legacy-formats</code></td><td>up to 0.29</td></tr>
+<tr><td><a href="./formats/values.html#tinks-kms-envelope">Tink KMS envelope</a></td><td><code>Encrypted&lt;T, Envelope&gt;</code></td><td><code>[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>current</td></tr>
+<tr><td><a href="./formats/values.html#formats-of-encrypted">Bare value</a></td><td><code>Encrypted&lt;T, Bare&gt;</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>current</td></tr>
+<tr><td><a href="./formats/values.html#encrypted-deks">Encrypted DEK</a></td><td><code>EncryptedDataEncryptionKey</code></td><td>the provider’s bytes</td><td>kms-aead, Tink for GCP and AWS keys</td><td>current</td></tr>
+<tr><td><a href="./formats/values.html#serialised-deks">Serialised DEK</a></td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message</td><td>kms-aead, Tink</td><td>current</td></tr>
+<tr><td><a href="./formats/values.html#formats-of-encrypted">TINK-prefixed value</a></td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery; kms-aead-keyring writes it too</td><td>current</td></tr>
+<tr><td><a href="./formats/streamed-values.html">Streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>AeadCipher::stream_encryptor</code> and <code>stream_decryptor</code>, and of the keyring’s <code>Encryptor::stream_encryptor</code> and <code>Keyring::stream_decryptor</code></td><td>see its page</td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte 5; kms-aead-keyring writes it too</td><td>current</td></tr>
+<tr><td><a href="./formats/streamed-values.html">Envelope streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>KmsAeadEnvelope::stream_encryptor</code> and <code>stream_decryptor</code></td><td>see its page</td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte <code>4 + w</code></td><td>current</td></tr>
+<tr><td><a href="./formats/streamed-values.html">Bare streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of the <code>stream_encryptor_bare</code> and <code>stream_decryptor_bare</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code></td><td>see its page</td><td>kms-aead with <code>stream</code>, any C2SP chunked-encryption reader</td><td>current</td></tr>
+<tr><td><a href="./formats/signatures-and-macs.html">Detached signature</a></td><td><code>Signature&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][signature]</code></td><td>kms-aead</td><td>current</td></tr>
+<tr><td><a href="./formats/signatures-and-macs.html">Attached signature</a></td><td><code>Signed&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][signature: w][payload]</code></td><td>kms-aead</td><td>current</td></tr>
+<tr><td><a href="./formats/signatures-and-macs.html">Detached MAC</a></td><td><code>Mac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][tag]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>current</td></tr>
+<tr><td><a href="./formats/signatures-and-macs.html">Attached MAC</a></td><td><code>WithMac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>current</td></tr>
+<tr><td><a href="./formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink keyset</a></td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery; kms-aead-keyring writes it too</td><td>current</td></tr>
+<tr><td><a href="./formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink encrypted keyset</a></td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key; kms-aead-keyring writes it too</td><td>current</td></tr>
+<tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
+<tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
+<tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets in early releases</td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
+<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead with <code>legacy-formats</code></td><td>legacy, except under Azure, which still writes it</td></tr>
 </tbody>
 </table>
 </div>
 <p><code>k = 0</code> records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
-provider encrypts the raw DEK in every release, see
-<a href="./formats/values.html#encrypted-deks">Encrypted DEKs</a>.</p>
-<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature. The
-reading rules and the upgrade of stored values are in
+provider encrypts the raw DEK, see <a href="./formats/values.html#encrypted-deks">Encrypted DEKs</a>.</p>
+<p>The legacy layouts are read only with the deprecated <code>legacy-formats</code> feature. The reading rules and
+the upgrade of stored values are in
 <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
 <h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
 <p>The first bytes of a stored value:</p>
@@ -236,23 +236,23 @@ reading rules and the upgrade of stored values are in
 <tr><th>First bytes</th><th>Layout</th></tr>
 </thead>
 <tbody>
-<tr><td><code>00 00 00 00</code></td><td>the length-prefixed envelope of 0.28.1 and earlier</td></tr>
-<tr><td><code>00</code>, then a length of 1 to 4,096</td><td>Tink’s KMS envelope, an envelope streamed value, or the 4-byte length prefix of 32-bit targets before 0.24.0</td></tr>
-<tr><td><code>01</code></td><td>envelope layout v1 of 0.29, or a TINK-prefixed value</td></tr>
+<tr><td><code>00 00 00 00</code></td><td>the legacy length-prefixed envelope</td></tr>
+<tr><td><code>00</code>, then a length of 1 to 4,096</td><td>Tink’s KMS envelope, an envelope streamed value, or the 4-byte length prefix of the legacy envelope on 32-bit targets</td></tr>
+<tr><td><code>01</code></td><td>the legacy envelope layout v1, or a TINK-prefixed value</td></tr>
 <tr><td><code>02</code></td><td>a DEK encrypted with the public half of an asymmetric KEK</td></tr>
-<tr><td><code>FF 01</code></td><td>encrypted DEK layout v1 of 0.29</td></tr>
+<tr><td><code>FF 01</code></td><td>the legacy encrypted DEK layout v1</td></tr>
 </tbody>
 </table>
 </div>
-<p>Only the decrypted DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
+<p>Only the decrypted DEK tells a Tink envelope from the legacy 32-bit layout: a raw key of
 16 or 32 bytes against a serialised Tink key, whose lengths differ. An encrypted DEK of AWS, Azure
 or the local KMS also starts with <code>0x01</code>, and Tink’s LEGACY and CRUNCHY output prefixes with <code>0x00</code>.</p>
 <p>A column that holds two layouts:</p>
 <ul>
 <li>Tink envelopes and TINK-prefixed values: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
-<li>Tink envelopes and 0.29 envelopes: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
-<li>Tink envelopes and 0.28.1 envelopes: the first four bytes;</li>
-<li>0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded
+<li>Tink envelopes and legacy envelopes of layout v1: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and legacy length-prefixed envelopes: the first four bytes;</li>
+<li>legacy envelopes of layout v1 and TINK-prefixed values: no byte tells them apart, so the layout is recorded
 outside the value, such as in another column;</li>
 <li>bare values and any other layout: a bare value has no framing, and its random nonce can start
 with any byte, so a column of bare values holds no other layout;</li>
@@ -261,9 +261,10 @@ with its random salt, so the call names the form, as <code>decrypt_bare</code> d
 <a href="./formats/streamed-values.html#streamed-values">Streamed values</a>;</li>
 <li>envelope streamed values and Tink envelopes: both start with <code>[w][encrypted DEK]</code>, so the
 layout is recorded outside the value, as for bare values;</li>
-<li>encrypted DEKs of 0.29 and of 0.30: <code>0xFF 0x01</code> starts no encrypted DEK of a built-in provider, so
-the library tells them apart for those. It never inspects the bytes of an application’s own
-provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its 0.29 keys before reading them.</li>
+<li>legacy encrypted DEKs of layout v1 and current ones: <code>0xFF 0x01</code> starts no encrypted DEK of a
+built-in provider, so the library tells them apart for those. It never inspects the bytes of an
+application’s own provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its legacy keys
+before reading them.</li>
 </ul>
 
                     </main>

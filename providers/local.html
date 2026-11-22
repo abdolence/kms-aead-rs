@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -188,16 +188,19 @@ the backend it is built with. It is for:</p>
 </ul>
 <p>kms-aead builds one only when the application calls one of its constructors; no provider falls
 back to it. Each constructor logs one <code>INFO</code> event naming the KEK id, its versions and where
-each version came from (<code>ephemeral</code>, <code>file</code>, <code>env</code> or <code>secret</code>), never the key. How the KMS
-providers compare is in <a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>,
-and the first example is in <a href="#tests-and-development">Tests and development</a>.</p>
+each version came from (<code>ephemeral</code>, <code>file</code>, <code>env</code> or <code>secret</code>), never the key.</p>
+<p>This page specifies <code>LocalKmsProvider</code> and the local signing and asymmetric providers. To compare
+them with the cloud KMS providers, read <a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.
+To run an application and its tests without a cloud account, read <a href="../getting-started/local-development.html">Develop and test without a
+cloud</a>. The first example is in <a href="#tests-and-development">Tests and
+development</a>.</p>
 <h2 id="configuration-authentication-and-permissions"><a class="header" href="#configuration-authentication-and-permissions">Configuration, authentication and permissions</a></h2>
 <p>No credentials and no permissions apply: the process holds the KEK, and protecting it is the
 operator’s job, see <a href="#limits">Limits</a>.</p>
 <h3 id="kek-ids-and-versions"><a class="header" href="#kek-ids-and-versions">KEK ids and versions</a></h3>
 <p>A <code>LocalKekId</code> names the KEK: 1 to 255 bytes of ASCII alphanumerics, <code>-</code>, <code>_</code> and <code>.</code>. Every
 encrypted DEK records it, and a decryption refuses a DEK encrypted under another id. The id is also
-the key of the <a href="../dek-caching.html">DEK cache</a>, so one id must name one set of KEK material: two
+the key of the DEK cache, see <a href="../dek-caching.html">DEK caching and reuse</a>, so one id must name one set of KEK material: two
 providers with the same id and different keys share cache entries.</p>
 <p>A provider holds one or more <code>LocalKek</code> versions of 32 bytes each. The highest version encrypts new
 DEKs unless <code>with_encrypting_version</code> names another, and every version it holds decrypts. Each
@@ -241,9 +244,8 @@ let kek = LocalKek::from_secret(
 <span class="boring">let _ = kek;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>0.30 took the raw bytes in <code>from_secret</code> and base64 in <code>from_file</code> and <code>from_env</code>, see
-<a href="../migrating-from-0.30.html#loading-a-local-kek">Migrating from 0.30</a>. Errors name the file or the
-variable, never its content.</p>
+<p>Errors name the file or the variable, never its content. For the format an older release assumed
+in each loader, see <a href="../migrating-from-0.30.html#loading-a-local-kek">Loading a local KEK</a>.</p>
 <h3 id="tests-and-development"><a class="header" href="#tests-and-development">Tests and development</a></h3>
 <p>An ephemeral provider has one random version-1 KEK that lives as long as the provider, so the
 DEKs it encrypts cannot be decrypted once the process exits. It suits tests:</p>
@@ -386,18 +388,16 @@ with <code>ASYMMETRIC_ENCRYPTED_DEK_FORMAT</code>, <code>LOCAL_KEK_ID_MISMATCH</
 <code>DECRYPT</code>;</li>
 <li><code>LocalAsymmetricKmsProvider::ephemeral</code> has one generated version-1 key of 2048 bits, for tests;</li>
 <li>it needs a backend with RSA: aws-lc-rs or RustCrypto. On ring it fails at construction with
-<code>UNSUPPORTED_ALGORITHM</code>. On RustCrypto the private half decrypts DEKs from trusted sources only, see
-<a href="../asymmetric-kek.html#what-each-backend-does">Asymmetric KEKs</a>.</li>
+<code>UNSUPPORTED_ALGORITHM</code>. On RustCrypto the private half decrypts DEKs from trusted sources only,
+see <a href="../crypto-backends.html#rustcrypto">RustCrypto</a>.</li>
 </ul>
 <h2 id="signing"><a class="header" href="#signing">Signing</a></h2>
 <p><code>LocalSigningProvider</code> signs with a private key the process holds, on the backend it is built with,
 as <code>LocalKmsProvider</code> does for KEKs, see <a href="../signing.html">Signatures and MACs</a>. <code>LocalSigningKeyName</code>
 names the key: 1 to 255 bytes of ASCII alphanumerics, <code>-</code>, <code>_</code> and <code>.</code>. A <code>LocalSigningKey</code> is one
 version of it, numbered by a <code>LocalSigningKeyVersion</code>: a PKCS#8 private key, either an Ed25519 key or
-a P-256 key, and the PKCS#8 names the algorithm. The loaders are <code>from_secret</code>, <code>from_file</code> and
-<code>from_env</code>, each taking a <code>PrivateKeyFormat</code>, <code>Pkcs8Der</code> or <code>Pkcs8Pem</code>. A file is a regular file of at
-most 32 KiB, and <code>from_env</code> reads the PEM text for <code>Pkcs8Pem</code> and the standard base64 of the DER for
-<code>Pkcs8Der</code>, as for an asymmetric KEK above.</p>
+a P-256 key, and the PKCS#8 names the algorithm. The loaders are those of an asymmetric KEK above,
+with the same <code>PrivateKeyFormat</code>, see <a href="../signing.html#key-formats">Key formats</a>.</p>
 <pre><code class="language-rust no_run">use std::num::NonZeroU32;
 
 use kms_aead::backends::AwsLc;
@@ -440,9 +440,9 @@ verifier from the provider.</li>
 <li>No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
 operator’s job;</li>
 <li>Every DEK encryption is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK version is
-safe for about 2^32 encryptions. With the per-call envelope every value costs one encryption: a
+safe for about 2^32 encryptions, see <a href="../security.html#nonces">Nonces</a>. With the per-call envelope every value costs one encryption: a
 host encrypting 1,000 values per second spends 2^32 encryptions in 50 days. Use <a href="../dek-caching.html">DEK
-reuse</a> so that one encryption serves many values, and add a new KEK version
+caching and reuse</a> so that one encryption serves many values, and add a new KEK version
 before the budget is spent;</li>
 <li>Crypto-shredding means destroying every copy of the KEK, backups included;</li>
 <li>DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS;</li>
@@ -451,7 +451,8 @@ memory, a core dump or a swap file included, signs as the application does. Remo
 every verifier’s set revokes a compromised key.</li>
 </ul>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
-<p>An encryption fails with <code>RANDOM_GENERATOR</code> when the backend’s CSPRNG fails. A decryption fails with
+<p>An encryption fails with <code>RANDOM_GENERATOR</code> when the backend’s CSPRNG (its cryptographically secure
+random number generator) fails. A decryption fails with
 <code>LOCAL_ENCRYPTED_DEK_FORMAT</code> when the encrypted DEK is not in the local layout,
 <code>LOCAL_KEK_ID_MISMATCH</code> when it was encrypted under another KEK id, <code>LOCAL_KEK_UNKNOWN_VERSION</code>
 when the provider does not hold its version, and <code>DECRYPT</code> when it is not authentic under that

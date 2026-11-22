@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -182,7 +182,10 @@
 <p>A beacon, or blind index, finds rows by a field’s value without decrypting the column: an
 HMAC-SHA256 of the value under a beacon key, truncated, stored beside the encrypted field. A
 query calculates the beacon of the value it looks for and matches it by equality. <code>Beacon&lt;T&gt;</code> holds
-the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is:</p>
+the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is.</p>
+<p>This page specifies beacons: the calls, what a beacon leaks and the bits. To look a user up by an
+encrypted email from start to finish, read <a href="./use-cases/equality-lookups.html">Find a user by an encrypted
+email</a> first.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -257,7 +260,7 @@ beacon so that a column can hold beacons of two keys at once;</li>
 </ul>
 <p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with serde and the <code>postgres</code> and <code>sqlx</code> features, and
 read back through <code>TryFrom</code>, which checks its layout, see <a href="./stored-values.html#beacont">Stored values</a>.
-See <a href="./formats/values.html#beacons">Formats</a> for its bytes.</p>
+See <a href="./formats/values.html#beacons">Values and DEKs</a> for its bytes.</p>
 <p>A message authentication code (MAC) over a value’s bytes, which is not truncated and never serves
 a lookup, is in <a href="./signing.html#beacons-and-macs">Beacons and MACs</a>.</p>
 <h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>
@@ -284,7 +287,7 @@ column then leaks which rows hold equal values as a deterministic column does.</
 compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
 never match: after a change of a column’s bits, its stored beacons match no lookup until a
 re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
-<a href="./use-cases/equality-lookups.html">Find rows by an encrypted value</a>.</p>
+<a href="./use-cases/equality-lookups.html">Find a user by an encrypted email</a>.</p>
 <h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
 <p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
 <code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the

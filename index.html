@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,42 +179,27 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="kms-envelope-encryption-for-rust"><a class="header" href="#kms-envelope-encryption-for-rust">KMS envelope encryption for Rust</a></h1>
-<p>Library provides envelope encryption with a key encryption key held by a KMS, and AEAD
-encryption without a KMS:</p>
+<p>The library provides envelope encryption with a key encryption key held by a KMS, and AEAD
+encryption without a KMS. It covers:</p>
 <ul>
-<li>KMS providers for:
-<ul>
-<li>Google Cloud KMS;</li>
-<li>AWS KMS;</li>
-<li>Azure Key Vault and Managed HSM;</li>
-<li>HashiCorp Vault Transit;</li>
-<li>A local KMS with a key the application holds, for development, tests and single-host
-installs;</li>
-</ul>
-</li>
-<li>AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;</li>
-<li>Tink’s KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
-and the library reads Tink’s, see <a href="./formats.html">Formats</a>;</li>
-<li>Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
-crates. A value encrypted by one backend decrypts with any other;</li>
-<li>Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
-keys;</li>
-<li>Deterministic encryption with AES-SIV, for values that are looked up by equality;</li>
-<li>Typed fields, <code>Encrypted&lt;T, F&gt;</code>, stored with serde, tokio-postgres or sqlx;</li>
-<li>Optional KMS-side random generators for GCP and AWS;</li>
-<li>Field encryption with a keyring, in the <code>kms-aead-keyring</code> crate: key versions kept in
-Firestore, PostgreSQL, Cloud Storage or S3, central staged rotation, beacons, and values in
-Tink’s wire format;</li>
-<li>Streaming encryption for files of any length, with reads of any byte range that fetch only the
-chunks that cover it;</li>
-<li>Signatures with Ed25519 and ECDSA P-256 keys held by a KMS, verified without a KMS in Rust and in
-a browser, and MACs under keyring key versions;</li>
-<li>Signed keyring records, so that whoever can write the keyring store cannot change which keys are
-used;</li>
-<li>Asymmetric KEKs, for producers that encrypt with a public key and can never decrypt;</li>
-<li>Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
-in them;</li>
-<li>No unsafe code.</li>
+<li>envelope encryption with Google Cloud KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a
+local KMS, see <a href="./envelope-encryption.html">Envelope encryption</a> and
+<a href="./providers.html">KMS providers</a>;</li>
+<li>AEAD encryption on ring, aws-lc-rs or RustCrypto, see <a href="./crypto-backends.html">Crypto backends</a>;</li>
+<li>typed encrypted fields for serde, tokio-postgres and sqlx, see <a href="./stored-values.html">Stored values</a>;</li>
+<li>fewer KMS calls with a DEK cache and DEK reuse, see <a href="./dek-caching.html">DEK caching and reuse</a>;</li>
+<li>deterministic encryption and beacons for lookups by equality, see
+<a href="./deterministic.html">Deterministic encryption</a> and <a href="./beacons.html">Beacons</a>;</li>
+<li>keys versioned and rotated centrally, in the <code>kms-aead-keyring</code> crate, see
+<a href="./keyring.html">Keyring and field encryption</a>;</li>
+<li>streaming encryption of files of any length, see <a href="./streaming.html">Streaming encryption</a>;</li>
+<li>signatures and MACs, see <a href="./signing.html">Signatures and MACs</a>;</li>
+<li>asymmetric KEKs for producers that can encrypt and never decrypt, see
+<a href="./asymmetric-kek.html">Asymmetric KEKs</a>;</li>
+<li>values that BigQuery and Tink, Google’s open-source cryptography library, read, see
+<a href="./formats.html">Formats</a>;</li>
+<li>tracing spans for every operation and every KMS call, see <a href="./observability.html">Observability</a>;</li>
+<li>no unsafe code.</li>
 </ul>
 <p>To start using the library, see <a href="./getting-started.html">Getting started</a>.</p>
 <h2 id="envelope-encryption"><a class="header" href="#envelope-encryption">Envelope encryption</a></h2>
@@ -231,28 +216,20 @@ with the AAD it was encrypted with. Use it to tie a value to where it is stored,
 and a row id, so that a value copied to another row fails to decrypt.</p>
 <h2 id="choosing-a-mode"><a class="header" href="#choosing-a-mode">Choosing a mode</a></h2>
 <p>The ways to use a KMS differ in how many DEKs exist, how often the KMS is called and what a
-stored value holds:</p>
+stored value holds. The table below sets the four modes side by side. Pick one by what the data
+needs:</p>
 <ul>
-<li><strong>Per-call envelope</strong>, the default of <code>KmsAeadEnvelope</code>: a new DEK for every value, encrypted
-with one KMS call, and stored in the value itself. Every decryption decrypts its DEK with one
-more KMS call, unless the envelope has a DEK cache, which serves repeated reads without the KMS,
-see <a href="./use-cases/fewer-kms-calls.html">Cut KMS calls with a DEK cache and DEK reuse</a>. Use it when
-values are written rarely, such as secrets and configuration, or when one DEK per value is a
-requirement. See <a href="./envelope-encryption.html">Envelope encryption</a>;</li>
-<li><strong>Store-less DEK reuse</strong>, a <code>KmsAeadEnvelope</code> with a <code>DekReusePolicy</code>: one DEK encrypts many
-values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
-still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
-the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
-<a href="./dek-caching.html">DEK caching and reuse</a>;</li>
-<li><strong>One fixed key</strong>, <code>encrypt</code> of <code>AeadCipher</code> or <code>DeterministicCipher</code> with one key that
-the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink’s wire
-format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
-it for a column that BigQuery reads, with no key rotation. See
-<a href="./one-fixed-key.html">One fixed key</a>;</li>
-<li><strong>Keyring</strong>, the <code>kms-aead-keyring</code> crate: a keyring record per scope holds the encrypted DEK
-versions, and values carry a 4-byte key id in Tink’s wire format instead of an encrypted DEK. The
-record is the place for central rotation and retirement of keys, and for values that BigQuery
-and Tink read across rotations. See <a href="./keyring.html">Keyring and field encryption</a>.</li>
+<li><strong>Per-call envelope</strong>, the default of <code>KmsAeadEnvelope</code>. Use it when values are written rarely,
+such as secrets and configuration, or when one DEK per value is a requirement. See
+<a href="./envelope-encryption.html">Envelope encryption</a>;</li>
+<li><strong>Store-less DEK reuse</strong>, a <code>KmsAeadEnvelope</code> with a <code>DekReusePolicy</code>. Use it for high write
+rates where a KMS call per value costs too much. See <a href="./dek-caching.html">DEK caching and reuse</a>
+and <a href="./use-cases/fewer-kms-calls.html">Cut KMS calls with a DEK cache and DEK reuse</a>;</li>
+<li><strong>One fixed key</strong>, <code>encrypt</code> of <code>AeadCipher</code> or <code>DeterministicCipher</code>. Use it for a column that
+BigQuery reads, with no key rotation. See <a href="./one-fixed-key.html">One fixed key</a>;</li>
+<li><strong>Keyring</strong>, the <code>kms-aead-keyring</code> crate. Use it when keys need central rotation and
+retirement, or when BigQuery and Tink read values across rotations. See
+<a href="./keyring.html">Keyring and field encryption</a>.</li>
 </ul>
 <div class="table-wrapper">
 <table>
@@ -319,8 +296,9 @@ cloud</a>.</p>
 </tbody>
 </table>
 </div>
-<p>Moving to a newer version is in the Upgrading section at the end of the book, starting with
-<a href="./migrating-from-0.30.html">Migrating from 0.30</a>.</p>
+<p>Moving to a newer version is covered by the guides in the Upgrading section at the end of the
+book: <a href="./migrating-from-0.30.html">Migrating from 0.30</a> and <a href="./migrating-from-0.29.html">Migrating from 0.29</a>.
+Apply them in order, newest first.</p>
 <h2 id="licence"><a class="header" href="#licence">Licence</a></h2>
 <p>Apache Software License (ASL)</p>
 

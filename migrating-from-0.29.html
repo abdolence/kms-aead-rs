@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,12 +179,25 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="migrating-from-029"><a class="header" href="#migrating-from-029">Migrating from 0.29</a></h1>
-<p>0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse,
-the DEK cache, deterministic encryption and the local KMS, and makes ring optional. It writes
-Tink’s KMS envelope format for every provider, so values written by 0.29 and earlier read only
-with the deprecated <code>legacy-formats</code> feature, which also rewrites them in the new format, see
-<a href="#old-values">Old values</a>. The default algorithm of the envelope is AES-256-GCM, see
-<a href="#default-algorithm">Default algorithm</a>.</p>
+<p>This guide moves a build from 0.29 to 0.30. To reach a later release, apply the guides after it in
+order, starting with <a href="./migrating-from-0.30.html">Migrating from 0.30</a>.</p>
+<p>0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse, the DEK
+cache, deterministic encryption and the local KMS, and makes ring optional. It writes the KMS
+envelope format of Tink, Google’s open-source cryptography library, for every provider. Values written by 0.29 and earlier read only with the deprecated
+<code>legacy-formats</code> feature, which also rewrites them in the new format, see <a href="#old-values">Old values</a>.</p>
+<p>Eight changes break a build against 0.29:</p>
+<ul>
+<li><a href="#features">the Cargo features</a> are renamed, and a provider feature no longer turns on ring;</li>
+<li><a href="#names">the names</a> of the envelope, the ciphers, the options and the DEK types change, and the
+Vault Transit types gain the <code>Hc</code> prefix;</li>
+<li><a href="#traits-replaced-by-inherent-methods"><code>AeadEncryption</code> and <code>KmsAeadEnvelopeEncryption</code></a> are
+gone, replaced by inherent methods;</li>
+<li><a href="#your-own-provider">the provider trait</a> is renamed and loses <code>#[async_trait]</code>;</li>
+<li><a href="#errors">the errors</a> gain variants, change codes and lose the <code>From</code> conversions of SDK errors;</li>
+<li><a href="#aws-kms-decryption-names-the-key">AWS KMS decryption</a> names the configured key;</li>
+<li><a href="#default-algorithm">the default algorithm</a> is AES-256-GCM, not ChaCha20-Poly1305;</li>
+<li><a href="#old-values">values written by 0.29 and earlier</a> read only with <code>legacy-formats</code>.</li>
+</ul>
 <p>0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:</p>
 <ul>
 <li>typed fields: <code>Encrypted&lt;T, F&gt;</code> takes any type that implements <code>Plaintext</code>, such as an
@@ -211,11 +224,11 @@ application newtype, where the tables below name <code>SecretValue</code>, see
 </tbody>
 </table>
 </div>
-<p>ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
+<p>In 0.30 the provider features do not turn on ring. A 0.29 build that relied on it fails with
 “kms-aead needs a crypto backend for its KMS providers”, so add a backend feature. <code>aws-lc</code> adds
 no second crypto library to a cloud provider build, see <a href="./getting-started/choosing.html#crypto-backends">Choose a provider and a
 backend</a>.</p>
-<p>The crate declares <code>rust-version = "1.99"</code>.</p>
+<p>0.30 declares <code>rust-version = "1.99"</code>.</p>
 <h2 id="names"><a class="header" href="#names">Names</a></h2>
 <div class="table-wrapper">
 <table>
@@ -232,7 +245,7 @@ backend</a>.</p>
 <tr><td>module <code>kms_aead::ring_encryption</code></td><td>removed; <code>AeadCipher&lt;Ring&gt;</code>, with <code>AeadCipher</code> at the crate root and <code>Ring</code> in <code>kms_aead::backends</code></td></tr>
 <tr><td><code>RingAeadEncryption::new()</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?</code></td></tr>
 <tr><td><code>RingAeadEncryption::with_algorithm(&amp;ring::aead::AES_256_GCM, rand)</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?</code></td></tr>
-<tr><td><code>RingAeadEncryption::with_rand</code>, <code>with_options</code>, <code>with_algorithm_options</code></td><td>removed; the backend owns its CSPRNG, and the random nonce was the only option</td></tr>
+<tr><td><code>RingAeadEncryption::with_rand</code>, <code>with_options</code>, <code>with_algorithm_options</code></td><td>removed; the backend owns its CSPRNG (cryptographically secure random number generator), and the random nonce was the only option</td></tr>
 <tr><td><code>RingAeadEncryptionOptions</code>, <code>RingAeadEncryptionNonceKind</code></td><td>removed</td></tr>
 <tr><td><code>RingAeadEncryption.algo</code></td><td><code>AeadCipher::algorithm()</code></td></tr>
 <tr><td><code>RingAeadEncryption::generate_data_encryption_key()</code></td><td><code>AeadCipher::generate_dek()</code></td></tr>
@@ -246,7 +259,7 @@ backend</a>.</p>
 <tr><td><code>encrypted_dek.wrapped()</code>, <code>to_bytes()?</code>, <code>TryFrom&lt;&amp;[u8]&gt;</code></td><td><code>encrypted_dek.value()</code>, a <code>&amp;[u8]</code>, and <code>EncryptedDataEncryptionKey::from(bytes)</code></td></tr>
 <tr><td><code>encrypted_dek.to_hex_string()?</code></td><td><code>encrypted_dek.to_hex_string()</code>, infallible</td></tr>
 <tr><td><code>encrypted_dek.key_version()</code></td><td><code>encrypted_dek.kek_version()</code>, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and <code>None</code> on one read back from the bytes; the <code>kek_version</code> field of the KMS spans</td></tr>
-<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KekVersion</code>, <code>KmsKeyVersion</code> from 0.31, the type of <code>AzureKmsKeyRef::kek_version</code></td></tr>
+<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KekVersion</code>, the type of <code>AzureKmsKeyRef::kek_version</code></td></tr>
 <tr><td><code>AzureKmsKeyRef::with_key_version</code>, <code>opt_key_version</code>, <code>without_key_version</code>, <code>key_version</code>, <code>mopt_key_version</code>, <code>reset_key_version</code></td><td><code>AzureKmsKeyRef::with_kek_version</code>, <code>opt_kek_version</code>, <code>without_kek_version</code>, <code>kek_version</code>, <code>mopt_kek_version</code>, <code>reset_kek_version</code></td></tr>
 <tr><td><code>AzureKmsKeyRef.key_version</code></td><td><code>AzureKmsKeyRef.kek_version</code></td></tr>
 <tr><td><code>DataEncryptionKey(secret)</code>, <code>DataEncryptionKey::new(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
@@ -297,14 +310,16 @@ calls that make no KMS call are not <code>async</code>:</p>
 </div>
 <p>Every cipher text is an <code>Encrypted&lt;T, F&gt;</code>, see <a href="./formats/values.html#formats-of-encrypted">Formats</a>. It
 has its own <code>value()</code> and <code>into_value()</code>, and so has <code>EncryptedDataEncryptionKey</code>.
-<code>DataEncryptionKey</code> no longer implements <code>ValueStruct</code>, and has its own <code>value()</code>.</p>
+<code>DataEncryptionKey</code> does not implement <code>ValueStruct</code> in 0.30, and has its own <code>value()</code>.</p>
+<p>0.30 does not implement <code>ConstantTimeEq</code> on the public types. <code>==</code> still compares in constant
+time. The <code>Debug</code> of <code>Encrypted</code> prints only the length, and <code>==</code> is gone from randomised values:
+only an <code>Encrypted&lt;T, Deterministic&gt;</code> has it.</p>
 <h2 id="your-own-provider"><a class="header" href="#your-own-provider">Your own provider</a></h2>
 <p>An application’s own implementation of the provider trait:</p>
 <ul>
 <li>implements <code>KmsAeadEncryptionProvider</code> instead of <code>KmsAeadRingEncryptionProvider</code>, without
 <code>#[async_trait]</code>. Its methods stay <code>async fn</code>, and their futures must be <code>Send</code>;</li>
-<li>adds <code>fn kek(&amp;self) -&gt; &amp;KekRef</code>, with <code>KekProvider::Other</code>, <code>KmsProvider::Other</code> from 0.31, and
-a key name that identifies the key;</li>
+<li>adds <code>fn kek(&amp;self) -&gt; &amp;KekRef</code>, with <code>KekProvider::Other</code>, and a key name that identifies the key;</li>
 <li>deletes <code>generate_encryption_key</code> when it returned the backend’s key. The replacement,
 <code>generate_key_material(&amp;self, len)</code>, has a default implementation that lets the backend generate
 the key, and is implemented only for a KMS generator;</li>
@@ -317,8 +332,6 @@ decrypt gets it from those bytes, as the Azure provider’s do.</li>
 <p>The trait has no <code>dyn</code> form, so a <code>Box&lt;dyn KmsAeadRingEncryptionProvider&gt;</code> becomes a type
 parameter <code>P: KmsAeadEncryptionProvider</code>, or an enum of the providers the application uses. The
 trait requires <code>Send</code> and <code>Sync</code>, so <code>P: KmsAeadEncryptionProvider</code> needs no <code>+ Send + Sync</code>.</p>
-<p>0.31 moves <code>decrypt_data_encryption_key</code> to a trait of its own, <code>KmsAeadDecryptionProvider</code>, see
-<a href="./migrating-from-0.30.html#your-own-provider">Migrating from 0.30</a>.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p><code>KmsAeadError</code> is <code>#[non_exhaustive]</code>, so an exhaustive <code>match</code> on it needs a <code>_</code> arm. It has two
 new variants, <code>UnsupportedAlgorithm</code> and <code>LegacyFormat</code>. <code>code()</code> returns the code of any variant,
@@ -333,12 +346,9 @@ and the details with <code>KmsAeadErrorPublicGenericDetails::new(code)</code>.</
 <code>SystemTimeError</code>. Map an SDK error in the application.</p>
 <p>The variant of a Google Cloud KMS or AWS KMS error follows its code. In 0.29 every gRPC status was
 a <code>NetworkError</code> and every AWS error an <code>EncryptionError</code>. A <code>PermissionDenied</code> or <code>NotFound</code> from
-Google Cloud KMS is an <code>EncryptionError</code> now, and a timeout, a connection failure or a
+Google Cloud KMS is an <code>EncryptionError</code> in 0.30, and a timeout, a connection failure or a
 <code>ThrottlingException</code> from AWS KMS a <code>NetworkError</code>. The codes stay the same. See
 <a href="./errors.html#retries">Retries</a>.</p>
-<p><code>ConstantTimeEq</code> is no longer implemented on the public types. <code>==</code> still compares in constant
-time. The <code>Debug</code> of <code>Encrypted</code> prints only the length, and <code>==</code> is gone from randomised values:
-only an <code>Encrypted&lt;T, Deterministic&gt;</code> has it.</p>
 <p>Error codes that changed:</p>
 <div class="table-wrapper">
 <table>

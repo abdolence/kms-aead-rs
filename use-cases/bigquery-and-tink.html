@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -180,9 +180,9 @@
                     <main>
                         <h1 id="decrypt-columns-in-bigquery-sql-or-with-tink"><a class="header" href="#decrypt-columns-in-bigquery-sql-or-with-tink">Decrypt columns in BigQuery SQL or with Tink</a></h1>
 <p>An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
-or Python needs to read values a Rust service wrote. Values the library writes are in Tink’s
-formats, so Tink in another language and BigQuery’s SQL read them, given the keys. Three routes lead
-there, and they differ in what the reader needs and in whether the key rotates:</p>
+or Python needs to read values a Rust service wrote. Values the library writes are in the formats
+of Tink, Google’s cryptography library, so Tink in another language and BigQuery’s SQL read them,
+given the keys. Three routes lead there, and they differ in what the reader needs and in whether the key rotates:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -224,7 +224,8 @@ does not read, see <a href="../keyring/bigquery.html#fields-bigquery-reads">Fiel
 query or the reader takes them;</p>
 </li>
 <li>
-<p>the job exports again:</p>
+<p>the job exports again. A <code>Readable</code> keyset holds every version of a purpose that decrypts and is
+not compromised, and a <code>Single</code> keyset one version, as its primary key:</p>
 <ul>
 <li>the <code>Readable</code> keysets after every <code>rotate</code>, before the promotion, and after every <code>retire</code>,
 every <code>mark_compromised</code> and every KEK rotation;</li>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,11 +179,16 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h1>
-<p><code>AeadCipher::encrypt</code> encrypts a field under a key the application holds, in Tink’s layout of a key
-whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
+<p>This page specifies the calls that encrypt under one key the application holds, in the layout that
+Tink, Google’s cryptography library, and BigQuery read. For the BigQuery side of a column, read
+<a href="./use-cases/bigquery-and-tink.html">Decrypt columns in BigQuery SQL or with Tink</a>. A column that
+needs key rotation belongs under a keyring.</p>
+<p><code>AeadCipher::encrypt</code> encrypts a field under a key the application holds, in Tink’s layout for a
+key with the output prefix TINK: <code>[0x01][key id: u32 BE]</code> before the AEAD value, an
 <code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an
-<code>Encrypted&lt;T, Deterministic&gt;</code>. The key id is a <code>KeyId</code>, the application’s constant, and Tink
-and BigQuery read the values with a keyset of the one key under that id:</p>
+<code>Encrypted&lt;T, Deterministic&gt;</code>. The key id is a <code>KeyId</code>, the application’s constant. Tink and
+BigQuery read the values with a keyset, Tink’s serialised list of keys and their ids, of the one
+key under that id:</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::Ring;
 use kms_aead::cache::{DekCache, DekCacheOptions};
 use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};

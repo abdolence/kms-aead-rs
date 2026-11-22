@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,12 +179,16 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="move-envelope-values-to-a-keyring"><a class="header" href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a></h1>
-<p>Values that kms-aead’s <code>KmsAeadEnvelope</code> wrote, per call or store-less, move to keyring values in
-five steps:</p>
+<p>An application that encrypted fields with <code>KmsAeadEnvelope</code> can move them to a keyring when it
+needs central rotation and retirement of keys, or BigQuery and Tink reads across rotations, see
+<a href="../keyring.html">Keyring and field encryption</a>. The values that <code>KmsAeadEnvelope</code> wrote, per call or
+store-less, move to keyring values in five steps. An <code>EncryptionMarker</code> is the 5 bytes a record
+stores beside its encrypted fields to name the key versions they are under, <code>0x01</code> and an epoch
+that counts re-encryptions, see <a href="./sweeps.html#the-encryption-marker">The encryption marker</a>:</p>
 <ol>
 <li>the model gains <code>encryption_marker: EncryptionMarker</code>, and every record without one reads as
 <code>EncryptionMarker::ENVELOPE</code>: through <code>#[serde(default)]</code>, or a column default of its bytes,
-<code>'\x0100000000'</code>;</li>
+<code>'\x0100000000'</code>, which is <code>0x01</code> and an epoch of 0;</li>
 <li>the field keeps its stored bytes, whose layout the marker names: envelope values under
 <code>ENVELOPE</code>, epoch 0, and keyring values under any other marker, since the epochs of a keyring
 start at 1;</li>
@@ -233,8 +237,8 @@ outcome. An envelope value names no key version, so its outcome has <code>from_c
     }
 };</code></pre>
 <p>The keyring’s provider decrypts the envelope values, so they must have been encrypted by the
-keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout kms-aead 0.30 writes.
-Values written by kms-aead 0.29 or earlier are upgraded in place first, with
+keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout <code>KmsAeadEnvelope</code> writes.
+Values in a legacy layout, which an old release wrote, are upgraded in place first, with
 <code>KmsAeadEnvelope::upgrade_legacy_value(aad, value)</code> under kms-aead’s <code>legacy-formats</code> feature, see
 <a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>. The layout of a value is always
 the marker’s, never inferred from its bytes.</p>

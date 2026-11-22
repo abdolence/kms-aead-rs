@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -182,6 +182,9 @@
 <p>Each <code>Keyring</code> keeps its record in the process, and the decrypted DEKs of its versions in
 kms-aead’s <a href="../dek-caching.html">DEK cache</a>. <code>encrypt</code>, <code>decrypt</code> and <code>beacon</code> read both, so the hot
 path calls neither the store nor the KMS.</p>
+<p>This page covers the options of the record cache, when a record is refreshed, and what a process
+does when the store fails, misbehaves or loses the record. Read it to set how fast a running
+process sees a change, and to know what an alert on the keyring’s log lines means.</p>
 <h2 id="options"><a class="header" href="#options">Options</a></h2>
 <p><code>KeyringRegistryOptions</code> configures the record cache of every keyring a registry opens, and its
 <code>keyring</code> field holds the <code>KeyringOptions</code> of the handles it returns. Each default is a public
@@ -236,9 +239,9 @@ under it at once.</li>
 <p>A change written by another process, such as a staged version, a promotion or a compromised flag,
 reaches a running process:</p>
 <ul>
-<li>with push: within <code>reload_min_interval</code> of the signal, about 5 seconds by default;</li>
+<li>with push: within <code>reload_min_interval</code> of the signal;</li>
 <li>without push, on Cloud Storage and S3, with <code>watch</code> off, or while the listener is disconnected:
-once the cached record is older than <code>record_ttl</code>, at most 5 minutes by default;</li>
+once the cached record is older than <code>record_ttl</code>;</li>
 <li>not until the store answers again, while its revalidations fail: it keeps its cached record,
 see below.</li>
 </ul>
@@ -249,41 +252,53 @@ previous version until their record refreshes, and those values decrypt, since t
 is <code>DecryptOnly</code>.</p>
 <h2 id="when-the-store-fails-or-misbehaves"><a class="header" href="#when-the-store-fails-or-misbehaves">When the store fails or misbehaves</a></h2>
 <ul>
-<li>A failed revalidation keeps the cached record in use, logs a <code>WARN</code>, “The keyring record could
-not be revalidated; the cached record stays in use”, and is retried after <code>reload_min_interval</code>.
-A process that logs it is one that misses every change until the store answers again, so alert
-on it;</li>
-<li>a record gone from the store is taken as a shredded keyring, see
-<a href="#a-record-gone-from-the-store">A record gone from the store</a>;</li>
-<li>a refreshed record is taken only if it moves every version forward from the cached one: no version
-missing, no changed algorithm or creation time, no compromised flag cleared, no state moved back
-against the lifecycle, such as a version back to <code>Pending</code>, no re-encryption epoch below the
-cached one, which would give records encrypted under different versions one marker, and no
-re-encryption range moved back or started or ended at or below the cached epoch, which would leave
-the records this process encrypted under a version outside its range. Otherwise the process keeps
-its record and logs an <code>ERROR</code> naming the first rule broken. <code>reload</code> and a write of a
-<code>KeyringAdmin</code> return <code>RecordRegressed</code> in that case.</li>
+<li>
+<p>A failed revalidation keeps the cached record in use, logs a <code>WARN</code> and is retried after
+<code>reload_min_interval</code>. A process that logs it is one that misses every change until the store
+answers again, so alert on it, see
+<a href="../observability/spans-and-events.html#keyring-events">Keyring events</a>;</p>
+</li>
+<li>
+<p>a record gone from the store is taken as a shredded keyring, see
+<a href="#a-record-gone-from-the-store">A record gone from the store</a>;</p>
+</li>
+<li>
+<p>a refreshed record is taken only if it moves every version forward from the cached one. The
+process refuses a record with any of these:</p>
+<ul>
+<li>a version missing;</li>
+<li>a changed algorithm or creation time;</li>
+<li>a compromised flag cleared;</li>
+<li>a state moved back against the lifecycle, such as a version back to <code>Pending</code>;</li>
+<li>a re-encryption epoch below the cached one, which would give records encrypted under different
+versions one marker;</li>
+<li>a re-encryption range moved back, or started or ended at or below the cached epoch, which
+would leave the records this process encrypted under a version outside its range.</li>
+</ul>
+<p>The process then keeps its record and logs an <code>ERROR</code> naming the first rule broken. <code>reload</code>
+and a write of a <code>KeyringAdmin</code> return <code>RecordRegressed</code> in that case.</p>
+</li>
 </ul>
 <p>The last rule is the detection of a rewritten or restored record in a running process. A process
 that starts after such a write has no record to compare with and takes it.</p>
 <h2 id="a-record-gone-from-the-store"><a class="header" href="#a-record-gone-from-the-store">A record gone from the store</a></h2>
 <p>A revalidation (by age or change signal), a forced <code>reload</code>, the read before an administrative
-write and a <code>shred</code> can each find that the store holds no record of the keyring. The process takes
+write and a <code>dangerously_shred()</code> can each find that the store holds no record of the keyring. The process takes
 it as a shredded keyring:</p>
 <ul>
 <li>it destroys every version of its cached record in memory, and writes nothing. That evicts the
 keyring’s keys from the DEK cache, and no other keys;</li>
-<li>it logs a <code>WARN</code>, “The keyring store no longer holds the keyring record; every version is
-destroyed in this process”, or an <code>INFO</code> when the record it held had every version destroyed
-already, as a shred leaves it, and sets the <code>changed</code> field of the <code>Keyring load</code> span to
-<code>deleted</code>. The process that ran the shred logs nothing and sets no field;</li>
+<li>it logs a <code>WARN</code>, or an <code>INFO</code> when the record it held had every version destroyed already, as a
+shred leaves it, and sets the <code>changed</code> field of the <code>Keyring load</code> span to <code>deleted</code>, see
+<a href="../observability/spans-and-events.html#keyring-events">Keyring events</a>. The process that ran the
+shred logs nothing and sets no field;</li>
 <li>it stops revalidating and watching the keyring;</li>
 <li>the keyring’s handles fail before any KMS call: encrypting with <code>NoActiveVersion</code>, reading with
 <code>KeyVersionDestroyed</code>, and <code>reload</code> with <code>RecordMissing</code>.</li>
 </ul>
 <p>The registry’s next <code>open</code> of the id reads the store again. It fails with <code>RecordMissing</code>, or takes
 a record created since. Handles opened before stay on the destroyed record, and a handle on the
-destroyed record reads the store no more, also for an administrative call: <code>shred</code> repeated on it
+destroyed record reads the store no more, also for an administrative call: <code>dangerously_shred()</code> repeated on it
 returns <code>Ok</code>, and every other call <code>RecordMissing</code>.</p>
 <p>How late the process sees the deletion is the bound of
 <a href="#how-late-a-change-is-seen">how late a change is seen</a>: within <code>reload_min_interval</code> of the

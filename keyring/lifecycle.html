@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,6 +179,9 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="key-versions-and-lifecycle"><a class="header" href="#key-versions-and-lifecycle">Key versions and lifecycle</a></h1>
+<p>This page covers the keyring record, the states of a key version, staged rotation, compromised
+versions and shredding. Read it before building an administrative job or interpreting a version’s
+state; the step-by-step procedures are in <a href="../production/rotation.html">Rotate keys and re-encrypt values</a>.</p>
 <h2 id="the-record"><a class="header" href="#the-record">The record</a></h2>
 <p>A keyring record holds:</p>
 <ul>
@@ -207,11 +210,10 @@ the configured KEK.</p>
 reads it as <code>admin.keyring().record()</code>.</p>
 <h2 id="key-ids"><a class="header" href="#key-ids">Key ids</a></h2>
 <p>Every value carries the key id of the version that encrypted it, and the id names the version’s
-purpose: randomised, deterministic or beacon. So a value of one purpose never decrypts under a
-version of another, and the purpose of a value is known from its bytes, see
-<a href="../formats/keyring-records.html#keyring-key-ids">Keyring key ids</a>. The keyring numbers the versions of each purpose
-from its first id: randomised versions are <code>1</code>, <code>2</code>, <code>3</code>, …, deterministic ones <code>2147483649</code>,
-<code>2147483650</code>, … and beacon ones <code>1073741825</code>, <code>1073741826</code>, …. Ids are never reused: a destroyed
+purpose: randomised, deterministic, beacon or MAC. So a value of one purpose never decrypts under a
+version of another, and the purpose of a value is known from its bytes. The keyring numbers the
+versions of each purpose in its own range, in creation order; the ranges are in
+<a href="../formats/keyring-records.html#keyring-key-ids">Keyring key ids</a>. Ids are never reused: a destroyed
 version keeps its id in the record.</p>
 <p>A key id is a <code>kms_aead::KeyId</code>, which the keyring re-exports. <code>value.key_id()</code> reads the key id
 of a stored value, and <code>version.algorithm().purpose()</code> the purpose of a version. An operation that
@@ -241,8 +243,11 @@ it.</p>
 <p><code>KeyringRegistry::create</code> starts each purpose with an active version. Every later version starts
 as pending, except the replacement <code>mark_compromised</code> adds for an active version, which is active
 at once.</p>
-<p>The calls, on a <code>KeyringAdmin</code>, with the <code>admin</code> feature, see
-<a href="../production/permissions.html">Permissions: applications and administration</a>:</p>
+<p>The calls that change a version’s state are on a <code>KeyringAdmin</code>, with the <code>admin</code> feature, see
+<a href="../production/permissions.html">Permissions: applications and administration</a>. The other calls of
+<code>KeyringAdmin</code> are in its
+<a href="https://docs.rs/kms-aead-keyring/latest/kms_aead_keyring/struct.KeyringAdmin.html">rustdoc</a>. The
+state-changing ones:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -259,10 +264,11 @@ at once.</p>
 <tr><td><code>destroy(key_id)</code></td><td><code>Retired</code> or <code>Pending</code> to <code>Destroyed</code></td></tr>
 <tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write; the record stays in the store, see below the table</td></tr>
 <tr><td><code>dangerously_shred()</code></td><td>destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see <a href="#shredding-a-keyring">Shredding a keyring</a></td></tr>
-<tr><td><code>reencrypt_deks()</code></td><td>decrypts and encrypts again every DEK in the record, under the KEK’s current version; no value changes. Returns a <code>DekReencryption</code> per version, with the KEK version its DEK moved from and to</td></tr>
 </tbody>
 </table>
 </div>
+<p><code>reencrypt_deks()</code> changes no state: it re-encrypts the DEKs under the KEK’s current version, see
+<a href="../production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>.</p>
 <p>After <code>dangerously_destroy_all_versions()</code> the keyring encrypts and decrypts nothing, except through a
 stream encryptor or decryptor already made, see <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with
 <code>dangerously_shred()</code></a>.</p>
@@ -274,7 +280,8 @@ version, its state and the <code>Transition</code>:</p>
 <li><code>retire</code>, <code>mark_compromised</code> and <code>reinstate</code> refuse a pending version, which never encrypted a
 value. <code>destroy</code> it instead.</li>
 </ul>
-<p>Each call reads the record, applies the change and writes it with a compare-and-swap, reading
+<p>Each call reads the record, applies the change and writes it with a compare-and-swap, a write
+that succeeds only if the record is still at the revision the call read, reading
 again after a conflict up to <code>KeyringOptions::cas_retries</code> times,
 <code>KeyringOptions::DEFAULT_CAS_RETRIES</code> by default, before <code>RecordConflict</code>.</p>
 <p>States move forward only: nothing returns to <code>Pending</code>, and <code>Pending</code> moves only to <code>Active</code> or
@@ -292,9 +299,9 @@ refresh, and every process that reads those values already has the version.</li>
 record, counted from <code>KeyVersion::staged_at()</code>. For a healthy process that time is at most
 <code>record_ttl</code>, <code>KeyringRegistryOptions::DEFAULT_RECORD_TTL</code> by default. A process whose
 revalidations fail keeps its cached record for as long as they fail, and logs a <code>WARN</code> on each
-failure: “The keyring record could not be revalidated; the cached record stays in use”. A
-deployment whose instances can take hours to update or to reach the store waits as long. Alert on
-that <code>WARN</code>: an instance that logs it is one a promotion can leave behind.</p>
+failure. A deployment whose instances can take hours to update or to reach the store waits as
+long. Alert on that <code>WARN</code>, see <a href="../observability/spans-and-events.html#keyring-events">Keyring events</a>:
+an instance that logs it is one a promotion can leave behind.</p>
 <p><code>promote</code> holds the promotion back for the registry’s <code>record_ttl</code> from <code>staged_at()</code>: before
 that it fails with <code>PromotionTooEarly</code>, whose <code>remaining</code> is the time left, so the job can sleep
 that long and call it again. The guard covers healthy processes only. <code>promote_now</code> skips it, for a

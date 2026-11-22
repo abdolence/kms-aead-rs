@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,6 +179,10 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="error-handling"><a class="header" href="#error-handling">Error handling</a></h1>
+<p>This page lists the errors of both crates: the variants of <code>KmsAeadError</code> and the codes of the
+library, what may be retried, the errors of <code>kms-aead-keyring</code>, and what an error never carries.
+Read it to decide how a caller reacts to a failure; the <a href="./production/runbook.html">Incident runbook</a>
+covers what an operator does about one.</p>
 <p>Every fallible call returns <code>KmsAeadResult&lt;T&gt;</code>, whose error is <code>kms_aead::errors::KmsAeadError</code>:</p>
 <ul>
 <li><code>SystemError</code>: the configuration or the environment, such as invalid provider options or a KMS
@@ -192,7 +196,7 @@ call fails the same way again;</li>
 <li><code>UnsupportedAlgorithm</code>: the backend does not implement the algorithm, from constructors only;</li>
 <li><code>SignatureError</code>: a signature could not be made, read or verified, or a KMS refused a sign or
 public-key request; never retried;</li>
-<li><code>LegacyFormat</code>: a stored value in a layout of 0.29 or earlier, which only the
+<li><code>LegacyFormat</code>: a stored value in a legacy layout, which only the
 <code>legacy-formats</code> feature reads, see <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</li>
 </ul>
 <p>The enum is <code>#[non_exhaustive]</code>, so a <code>match</code> on it needs a <code>_</code> arm.</p>
@@ -240,10 +244,10 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tr><td><code>UNKNOWN_CIPHER_TEXT_LAYOUT</code></td><td>encryption</td><td>an empty envelope value, or a first byte that starts no layout</td></tr>
 <tr><td><code>INVALID_PLAINTEXT</code></td><td>encryption</td><td>a decrypted value that is not an encoding of its type, or a <code>JsonEncoded</code> value that does not serialise</td></tr>
 <tr><td><code>INVALID_KEY_FORMAT</code></td><td>encryption</td><td>a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset</td></tr>
-<tr><td><code>INVALID_ENCRYPTED_KEY_FORMAT</code></td><td>encryption</td><td>the encrypted DEK layout v1 of 0.29 that cannot be read, with <code>legacy-formats</code></td></tr>
-<tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29</td></tr>
+<tr><td><code>INVALID_ENCRYPTED_KEY_FORMAT</code></td><td>encryption</td><td>the legacy encrypted DEK layout v1 that cannot be read, with <code>legacy-formats</code></td></tr>
+<tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a legacy layout</td></tr>
 <tr><td><code>INVALID_HEX</code></td><td>encryption</td><td><code>try_from_hex_string</code> of text that is not hex</td></tr>
-<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
+<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a legacy layout without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the legacy envelope layouts in <code>separate</code></td></tr>
 <tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
 <tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
 </tbody>

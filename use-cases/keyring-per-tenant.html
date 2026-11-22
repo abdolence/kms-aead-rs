@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -237,13 +237,12 @@ and runs with the administrative rights, so it is trusted as the administration 
 <ul>
 <li><strong>store reads</strong>: one at the first <code>open</code>, and one revalidation per keyring per <code>record_ttl</code>, or
 per change signal, see <a href="../keyring/record-cache.html#how-the-record-is-refreshed">How the record is refreshed</a>;</li>
-<li><strong>connections</strong>: on Firestore, one listen stream per store, with a target on each keyring’s
-document; on PostgreSQL, at most two connections per store, however many keyrings, see
-<a href="../keyring/stores.html">Keyring stores</a>;</li>
+<li><strong>connections</strong>: a store holds a fixed number of listen streams or connections, however many
+keyrings it serves, see <a href="../keyring/stores.html">Keyring stores</a>;</li>
 <li><strong>the DEK cache</strong>: one per registry, shared by its keyrings, with an entry per version in use per
-keyring. It holds <code>DekCacheOptions::DEFAULT_MAX_ENTRIES</code>, 1024, by default, and an entry evicted
-for capacity is decrypted through the KMS again on its next use, so size it above the tenants a
-process serves times the versions each uses, see <a href="../dek-caching.html#sizing">Sizing</a>;</li>
+keyring. An entry evicted for capacity is decrypted through the KMS again on its next use, so
+size it above the tenants a process serves times the versions each uses, see
+<a href="../dek-caching.html#sizing">Sizing</a>;</li>
 <li><strong>KMS calls</strong>: one decryption per version per DEK cache TTL in every process, and two per version
 in each <code>reencrypt_deks</code>. A KEK rotation re-encrypts every keyring under the KEK, see
 <a href="../production/rotation.html#the-kms-decrypt-burst">The KMS decrypt burst</a>;</li>

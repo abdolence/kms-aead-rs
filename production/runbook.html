@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -194,7 +194,7 @@ Rehearse each on a staging keyring, on a schedule, and record how long propagati
 <tr><td>A principal got KMS rights it should not have, or the KMS audit log shows an <code>Encrypt</code> or a <code>Decrypt</code> by one that should not</td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
 <tr><td>An encrypted DEK or a keyring record leaked</td><td><a href="#an-encrypted-dek-or-the-keyring-record-leaked">An encrypted DEK or the keyring record leaked</a></td></tr>
 <tr><td>An <code>ERROR</code> for a refused record that moves backwards, or a version the job did not create</td><td><a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></td></tr>
-<tr><td>A keyring record was deleted or corrupted, or a <code>WARN</code> that the store no longer holds the record</td><td><a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
+<tr><td>A keyring record was deleted or corrupted, or a <code>WARN</code> about a record gone from the store</td><td><a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
 <tr><td>The KMS is down</td><td><a href="#a-kms-outage">A KMS outage</a></td></tr>
 <tr><td>A tenant’s values must become unreadable</td><td><a href="#a-scopes-values-must-become-unreadable">A scope’s values must become unreadable</a></td></tr>
 </tbody>
@@ -260,7 +260,7 @@ version is a leaked DEK.</li>
 <h2 id="an-encrypted-dek-or-the-keyring-record-leaked"><a class="header" href="#an-encrypted-dek-or-the-keyring-record-leaked">An encrypted DEK or the keyring record leaked</a></h2>
 <p>Harmless by itself, since decrypting needs the KMS. If the attacker may also gain <code>Decrypt</code> on the
 KEK, follow the IAM over-grant steps. If the attacker may also write the keyring store, see
-<a href="#a-version-the-administrative-job-did-not-create">the next case</a> and the store-writer threat in
+<a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a> and the store-writer threat in
 <a href="../security.html#keyring-deployment">Keyring deployment</a>.</p>
 <h2 id="a-version-the-administrative-job-did-not-create"><a class="header" href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></h2>
 <p>A version in the keyring record that the administrative job did not create.</p>
@@ -283,8 +283,8 @@ administrative job should.</li>
 in the record that the administrative job’s log does not show. The event’s <code>rule</code> names the version
 that moved backwards, except <code>the re-encryption epoch moved back</code>, which names none: compare the
 versions of the record in the store with the job’s log to find the one it did not create. Either
-means that something other than the job wrote the record: a restore, which <a href="#the-keyring-record-was-deleted-or-corrupted">the next
-case</a> covers, or a writer of the store.</p>
+means that something other than the job wrote the record: a restore, which <a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or
+corrupted</a> covers, or a writer of the store.</p>
 <h2 id="the-keyring-record-was-deleted-or-corrupted"><a class="header" href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></h2>
 <p>The record is gone from the store, or unreadable.</p>
 <ol>
@@ -307,19 +307,20 @@ up the table.</p>
 <a href="../keyring/record-cache.html#when-the-store-fails-or-misbehaves">Record cache</a>. At its next
 revalidation, forced <code>reload</code> or administrative call it destroys every version of its cached record
 in memory, evicts the keyring’s keys from the DEK cache and logs a <code>WARN</code>, “The keyring store no
-longer holds the keyring record; every version is destroyed in this process”. A
-<a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">shred</a> writes the record
-with every version destroyed before it deletes it: a process that read that record logs an <code>INFO</code> for the deletion instead, and the process that ran
-the shred logs nothing. A process that first reads the store after the delete, such as one without
-push, logs the <code>WARN</code> for a shred too, so the <code>WARN</code> does not tell an accidental deletion from an
-erasure by itself. Its handles then
+longer holds the keyring record; every version is destroyed in this process”. Its handles then
 fail: <code>encrypt</code> with <code>NoActiveVersion</code>, <code>decrypt</code> with <code>KeyVersionDestroyed</code>, and <code>reload</code> with
 <code>RecordMissing</code>. Within the bound of
 <a href="../keyring/record-cache.html#how-late-a-change-is-seen">how late a change is seen</a>, an accidental
 deletion stops every process that holds the keyring. New processes fail at <code>open</code> with
-<code>RecordMissing</code>. A record that fails to parse or validate is a failed read instead: a running
-process keeps its cached record and logs the <code>WARN</code> of a failed revalidation, and new processes
-fail at <code>open</code> with <code>RecordInvalid</code>.</p>
+<code>RecordMissing</code>.</p>
+<p>A <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">shred</a> writes the
+record with every version destroyed before it deletes it. A process that read that record logs an
+<code>INFO</code> for the deletion instead, and the process that ran the shred logs nothing. A process that
+first reads the store after the delete, such as one without push, logs the <code>WARN</code> for a shred too,
+so the <code>WARN</code> does not tell an accidental deletion from an erasure by itself.</p>
+<p>A record that fails to parse or validate is a failed read instead: a running process keeps its
+cached record and logs the <code>WARN</code> of a failed revalidation, and new processes fail at <code>open</code> with
+<code>RecordInvalid</code>.</p>
 <h2 id="a-kms-outage"><a class="header" href="#a-kms-outage">A KMS outage</a></h2>
 <p>DEKs in the cache serve reads and writes until their TTL. A longer DEK cache TTL buys time at the
 cost of a longer life of plaintext keys in memory. No decryption, encryption or rotation succeeds

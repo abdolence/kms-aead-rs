@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,6 +179,10 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="encrypted-fields-and-aad"><a class="header" href="#encrypted-fields-and-aad">Encrypted fields and AAD</a></h1>
+<p>This page covers the encrypted value a keyring produces, how to keep it in an application record,
+and how the keyring builds the additional authenticated data (AAD) that binds a value to its field
+and row. Read it when you model the encrypted fields of an application; the end-to-end walkthrough
+is <a href="../use-cases/encrypt-fields.html">Encrypt personal data and secrets in your database</a>.</p>
 <h2 id="encrypted-values"><a class="header" href="#encrypted-values">Encrypted values</a></h2>
 <p>A keyring value is kms-aead’s <a href="../stored-values.html#encryptedt-f"><code>Encrypted&lt;T, Randomized&gt;</code></a>,
 re-exported by the keyring: the bytes to store, which decrypt to a <code>T</code>. <code>T</code> is any type that
@@ -381,9 +385,8 @@ and skip that check.</li>
 <p>There are three ways to put the application’s own data, such as a user id or a tenant, into the
 AAD:</p>
 <ul>
-<li><code>spec.aad(&amp;id)</code> with the application’s id as the <code>EntityId</code>. The id follows the <code>EntityId</code>
-rules: 1 to 255 bytes of UTF-8 without <code>/</code>, NUL or another ASCII control character. It is
-treated as personal data and never logged;</li>
+<li><code>spec.aad(&amp;id)</code> with the application’s id as the <code>EntityId</code>, which follows the rules of
+<a href="#aad">AAD</a> and is treated as personal data and never logged;</li>
 <li><code>FieldAad::with_context(bytes)</code> appends <code>/</code> and any bytes, such as a tenant or a schema version. A
 value encrypted with a context decrypts only with the same one. The context may itself hold <code>/</code>,
 so keep the contexts of one field apart yourself. A BigQuery reader appends the same bytes in SQL,

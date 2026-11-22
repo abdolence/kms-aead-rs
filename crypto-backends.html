@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,10 +179,13 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="crypto-backends"><a class="header" href="#crypto-backends">Crypto backends</a></h1>
+<p>This page specifies the crypto backends: the libraries that run the AEAD algorithms, the algorithms
+each one has, and the calls that need no KMS. To pick one for a build, FIPS included, read
+<a href="./getting-started/choosing.html#crypto-backends">Choose a provider and a backend</a> first.</p>
 <p>The AEAD algorithms run on a crypto library that a feature compiles in. Each backend feature adds
-a type to <code>kms_aead::backends</code>, and <code>AeadCipher</code>, <code>DeterministicCipher</code>, <code>KmsAeadEnvelope</code> and <code>LocalKmsProvider</code> take
-that type as their backend type parameter <code>B</code>. A build may enable any number of backends, and
-there is no default one.</p>
+a type to <code>kms_aead::backends</code>, and <code>AeadCipher</code>, <code>DeterministicCipher</code>, <code>KmsAeadEnvelope</code> and
+<code>LocalKmsProvider</code> take that type as their backend type parameter <code>B</code>. A build may enable any
+number of backends, and there is no default one.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -236,7 +239,8 @@ assert_eq!(orders.round_trip(&amp;card).await?, card);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>B::generate_random_bytes(len)</code> returns <code>len</code> bytes from the CSPRNG of the backend <code>B</code>, for
-secrets the application generates itself.</p>
+secrets the application generates itself. A CSPRNG is a cryptographically secure random number
+generator, the kind of source that keys and nonces need.</p>
 <h2 id="algorithms"><a class="header" href="#algorithms">Algorithms</a></h2>
 <div class="table-wrapper">
 <table>
@@ -254,9 +258,9 @@ secrets the application generates itself.</p>
 </table>
 </div>
 <p>Every AEAD algorithm writes <code>[nonce: 12][ciphertext][tag: 16]</code>, with a random nonce from the
-backend’s CSPRNG. The two RSA rows are the RSA-OAEP (RSA encryption with OAEP padding) of
-<a href="./asymmetric-kek.html#what-each-backend-does">Asymmetric KEKs</a>: the encryption of a DEK with the
-public key, and the private half of a <code>LocalAsymmetricKmsProvider</code>. A backend that does not
+backend’s CSPRNG, see <a href="./formats/values.html#formats-of-encrypted">Values and DEKs</a>. The two RSA rows
+are the RSA-OAEP (RSA encryption with OAEP padding) of <a href="./asymmetric-kek.html">Asymmetric KEKs</a>: the
+encryption of a DEK with the public key, and the private half of a <code>LocalAsymmetricKmsProvider</code>. A backend that does not
 implement the algorithm fails at construction, never later, with
 <code>KmsAeadError::UnsupportedAlgorithm</code> and the code <code>UNSUPPORTED_ALGORITHM</code>:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
@@ -325,7 +329,8 @@ so an encryption with a public key and a local RSA private half fail at construc
 memory after each call.</p>
 <h2 id="aws-lc-rs-and-fips"><a class="header" href="#aws-lc-rs-and-fips">aws-lc-rs and FIPS</a></h2>
 <p><code>aws-lc</code> builds aws-lc-rs with every algorithm. It is the backend that adds no second crypto
-library to a build with a cloud provider, since the providers already build aws-lc-rs for TLS.</p>
+library to a build with a cloud provider, since the default features of the providers already build
+aws-lc-rs for TLS.</p>
 <p><code>aws-lc-fips</code> runs the same backend on the AWS-LC FIPS module, and builds only the FIPS module,
 so it does not need <code>aws-lc</code>. It needs CMake and Go to build. Be aware it moves every user of
 aws-lc-rs in the build to the FIPS module, the rustls aws-lc-rs provider included. A build with
@@ -340,9 +345,14 @@ them.</p>
 <h2 id="rustcrypto"><a class="header" href="#rustcrypto">RustCrypto</a></h2>
 <p>Every algorithm, in pure Rust, with <code>getrandom</code> as the CSPRNG. It needs no C compiler. The
 feature turns on the crates’ <code>zeroize</code> features, so their key objects, and the Poly1305 and
-POLYVAL keys each call derives, are zeroised when dropped.</p>
-<p>RSA-OAEP runs on the <code>rsa</code> crate. A <code>LocalAsymmetricKmsProvider</code> on RustCrypto decrypts DEKs from
-trusted sources only, see <a href="./asymmetric-kek.html#what-each-backend-does">Asymmetric KEKs</a>.</p>
+POLYVAL keys (the authentication keys of ChaCha20-Poly1305 and AES-256-GCM-SIV) each call
+derives, are zeroised when dropped.</p>
+<p>The feature adds the <a href="https://crates.io/crates/rsa"><code>rsa</code></a> crate for RSA-OAEP. Its private-key
+operation runs only in a <code>LocalAsymmetricKmsProvider</code> on RustCrypto. Encrypting with the public key
+is a public-key operation with no private key to leak, and a cloud reader runs no RSA. Every
+application that enables <code>rustcrypto</code> carries <code>rsa</code> in its lockfile. A local KMS on RustCrypto
+decrypts DEKs from trusted sources only, such as its own keyring record. A process that decrypts
+what others send runs its private half on <code>AwsLc</code>, or in a KMS.</p>
 
                     </main>
 

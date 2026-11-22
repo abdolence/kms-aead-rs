@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -183,16 +183,19 @@
 <p>Randomised encryption gives a different cipher text every time, even for the same value. A
 deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so an
 encrypted column can be compared, joined or looked up by equality without decrypting it.</p>
+<p>This page specifies <code>DeterministicCipher</code> and what deterministic encryption leaks. To find a row by
+an encrypted value, read <a href="./use-cases/equality-lookups.html">Find a user by an encrypted email</a> first.
+Under a keyring the same fields are in <a href="./keyring/deterministic.html">Deterministic fields</a>.</p>
 <p>The library provides AES-SIV (RFC 5297) with a 64-byte key, <code>DeterministicAlgorithm::Aes256Siv</code>. Its
 name for <code>FromStr</code> and <code>Display</code> is <code>aes-256-siv</code>. <code>DeterministicCipher</code> takes a backend, as
-<code>AeadCipher</code> does, and draws its keys from the backend’s CSPRNG. Every backend encrypts and decrypts
-with the RustCrypto <code>aes-siv</code> crate, so a value encrypted under one backend decrypts under any
-other.</p>
+<code>AeadCipher</code> does, and draws its keys from the backend’s CSPRNG (cryptographically secure random
+number generator). Every backend encrypts and decrypts with the RustCrypto <code>aes-siv</code> crate, so a
+value encrypted under one backend decrypts under any other.</p>
 <p>AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
-validated boundary, also on <code>aws-lc-fips</code>, where the keys come from the FIPS module’s DRBG.</p>
+validated boundary, also on <code>aws-lc-fips</code>, where the keys come from the DRBG (deterministic random
+bit generator, the random source) of the FIPS module.</p>
 <p>Deterministic encryption fits exact-match lookups where the leak of equality is acceptable. When
-a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see
-<a href="./use-cases/equality-lookups.html">Find rows by an encrypted value</a>.</p>
+a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see <a href="./beacons.html">Beacons</a>.</p>
 <h2 id="what-it-leaks"><a class="header" href="#what-it-leaks">What it leaks</a></h2>
 <p>Be aware what equal cipher texts tell a reader of the stored data, without any key:</p>
 <ul>
@@ -244,11 +247,13 @@ let decrypted: SecretValue = cipher.decrypt(aad, &amp;first, &amp;dek)?;
 assert_eq!(decrypted, SecretValue::from("user@example.com"));
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>An <code>Encrypted&lt;T, Deterministic&gt;</code> is <code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code>: Tink’s
-5-byte TINK prefix that names the key by its <code>KeyId</code>, then the output of RFC 5297, so Tink and
-BigQuery read it with a keyset of that key, see
-<a href="./one-fixed-key.html">One fixed key</a>. Its equality compares in constant time,
-and its <code>Debug</code> prints only the length, since the bytes tell which values are equal.</p>
+<p>An <code>Encrypted&lt;T, Deterministic&gt;</code> is Tink’s output prefix, which names the key by its <code>KeyId</code>, and then
+the output of RFC 5297, which starts with its synthetic IV: the AES-SIV tag that is derived from the
+plaintext and the AAD, and that makes equal inputs give equal values. The layout is in
+<a href="./formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>. Tink, Google’s cryptography
+library, and BigQuery read it with a keyset of that key, see <a href="./one-fixed-key.html">One fixed key</a>. Its
+equality compares in constant time, and its <code>Debug</code> prints only the length, since the bytes tell
+which values are equal.</p>
 <h2 id="keys-encrypted-by-a-kms"><a class="header" href="#keys-encrypted-by-a-kms">Keys encrypted by a KMS</a></h2>
 <p>The envelope generates and decrypts deterministic keys with its provider:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;

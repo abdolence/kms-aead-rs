@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,18 +179,19 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="deterministic-fields"><a class="header" href="#deterministic-fields">Deterministic fields</a></h1>
-<p>Feature <code>deterministic</code>, to create deterministic key versions. The deterministic types exist in
-every build, so values pass through a process without the feature.</p>
-<p>Deterministic fields fit exact-match lookups where the leak of equality is acceptable. When a
-field only needs lookups and its stored value should stay randomised, a
-<a href="./beacons.html">beacon</a> fits instead.</p>
+<p>This page covers how a keyring encrypts, queries and rotates deterministic fields. Feature
+<code>deterministic</code>, to create deterministic key versions. The deterministic types exist in every
+build, so values pass through a process without the feature.</p>
+<p>The generic <a href="../deterministic.html">Deterministic encryption</a> page owns the AES-SIV primitive and what
+it leaks. Deterministic fields fit exact-match lookups where the leak of equality is acceptable;
+to choose between them and a <a href="./beacons.html">beacon</a>, read
+<a href="../use-cases/equality-lookups.html">Find a user by an encrypted email</a>.</p>
 <h2 id="what-they-leak"><a class="header" href="#what-they-leak">What they leak</a></h2>
-<p>A deterministic column leaks equality and frequency to anyone who reads it, and a leaked
-deterministic DEK lets its holder test candidate values offline, see
-<a href="../deterministic.html#what-it-leaks">What it leaks</a> in kms-aead.</p>
-<p>The AAD of a deterministic field names its kind and field and no entity, see <a href="#aad">AAD</a>, so a
-deterministic value also decrypts in any row of the same kind and field, and a deterministic field
-never decides identity or authorisation on its own.</p>
+<p>What a deterministic column and a leaked deterministic DEK allow is in
+<a href="../deterministic.html#what-it-leaks">What it leaks</a>. The keyring adds one rule: the AAD of a
+deterministic field names its kind and field and no entity, see <a href="#aad">AAD</a>, so a deterministic
+value also decrypts in any row of the same kind and field, and a deterministic field never decides
+identity or authorisation on its own.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
 <p>A keyring with deterministic versions names their algorithm in its <code>KeyringAlgorithms</code>: AES-SIV,
 the one <code>DeterministicAlgorithm</code> has:</p>
@@ -344,6 +345,12 @@ retired. That is why deterministic versions are rotated rarely, and every rotati
 a full sweep, see <a href="../production/rotation.html#rotation-cadence">Rotation cadence</a>.</p>
 <p>Be aware a query with several probes puts the values of one plaintext under each version side by
 side, so a reader of the query log links a value’s history across a rotation.</p>
+<p>A sweep re-encrypts a deterministic field with <code>reencrypt_deterministic</code>, as it re-encrypts a
+randomised one with <code>reencrypt</code>, see <a href="../production/sweeps.html#re-encrypting-a-value">Re-encrypting a value</a>.</p>
+<h2 id="bigquery"><a class="header" href="#bigquery">BigQuery</a></h2>
+<p>BigQuery reads deterministic values with the keysets of <code>export_bigquery_keyset</code>, and a query
+encrypts its probes in SQL with a <code>Single</code> keyset per version, see
+<a href="./bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>.</p>
 
                     </main>
 

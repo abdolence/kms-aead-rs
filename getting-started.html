@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,6 +179,9 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h1>
+<p>This page adds the crate, encrypts a value with an envelope and with a keyring, and links the
+choices a build makes. To decide which provider and backend fit, read <a href="./getting-started/choosing.html">Choose a provider and a
+backend</a>.</p>
 <p>Cargo.toml:</p>
 <pre><code class="language-toml">[dependencies]
 kms-aead = { version = "0.33", features = ["gcp-kms-encryption", "aws-lc"] }
@@ -235,7 +238,15 @@ secret-vault-value = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 </code></pre>
 <p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
-cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>
+cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>.</p>
+<ul>
+<li><code>KeyringAdmin</code> creates and rotates the keyring, and <code>Keyring</code> is the application’s handle that
+encrypts and decrypts;</li>
+<li>a rotation is staged: <code>rotate</code> adds a version, and a later promotion makes it the one that
+encrypts, so every process can load the new version before it is used;</li>
+<li><code>FieldAad</code> is the AAD of one field of one record, built from the entity kind, the field name and
+the entity id.</li>
+</ul>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;

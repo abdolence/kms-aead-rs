@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -199,7 +199,7 @@ and a beacon, a truncated HMAC stored beside a field that stays randomised.</p>
 </tbody>
 </table>
 </div>
-<p>With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
+<p>With the default of 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
 emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
 about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.
 How the bits trade rows to filter against what the column leaks is in
@@ -231,7 +231,7 @@ encode the same bytes, see <a href="../beacons.html#normalisation">Normalisation
 <li>compute the probes of the value looked for, one per key that still decrypts: with kms-aead
 alone one, or two during a rotation by hand until the re-index; with a keyring one per version;</li>
 <li>query by them: <code>WHERE email_beacon = ANY($1)</code> on PostgreSQL with the probes bound as a
-<code>BYTEA[]</code>, an <code>in</code> filter on Firestore, which takes up to 30 values, see
+<code>BYTEA[]</code>, an <code>in</code> filter on Firestore, which limits its number of values, see
 <a href="../keyring/deterministic.html#queries-across-rotations">Queries across rotations</a>;</li>
 <li>for a beacon, decrypt every row found and keep the ones whose plaintext equals the value: an
 equal beacon never proves an equal value.</li>

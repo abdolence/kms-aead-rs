@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -187,8 +187,9 @@ a JSON document that lists public keys. See <a href="../signing.html">Signatures
 <p>A bank publishes its exchange rates as a JSON document. The type that holds the document implements
 <code>SignableType</code>, which names its payload type, and is signed as <code>JsonEncoded::new(rates)</code>, which stands
 for the compact JSON of the value. The payload type is signed with the bytes, so a signature over
-the rates never verifies as another kind of document. Canonicalise the JSON before it is
-signed if anything serialises it again. To publish large files, sign one document that lists their
+the rates never verifies as another kind of document. If anything serialises the JSON again,
+canonicalise it before it is signed: write it in one fixed form, so that every serialiser produces
+the same bytes. To publish large files, sign one document that lists their
 SHA-256 digests instead of each file, and compare the digest of each downloaded file with its entry
 once the document verifies.</p>
 <p>The signing key is a KMS key version that signs, such as a Cloud KMS <code>EC_SIGN_P256_SHA256</code> version.
@@ -308,8 +309,10 @@ a verifier that needs more pin it in its own configuration. The library does not
 <li>a signature has no expiry and the set has no revocation list. Put a version or a date in the
 document, such as the <code>date</code> of the rates, so that a verifier can refuse an old document that is
 still validly signed;</li>
-<li>ECDSA signatures are malleable: never use signature bytes as an identifier;</li>
-<li>the signature does not hide the document, see <a href="./large-files.html">Large files</a> for the content.</li>
+<li>ECDSA signatures are malleable, which means a third party can turn a valid signature into another
+valid one for the same document: never use signature bytes as an identifier;</li>
+<li>the signature does not hide the document, see
+<a href="./large-files.html">Store customer uploads and serve byte ranges</a> for the content.</li>
 </ul>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/signing.rs">here</a>.</p>

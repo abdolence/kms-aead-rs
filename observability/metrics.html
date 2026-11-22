@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,6 +179,8 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="metrics"><a class="header" href="#metrics">Metrics</a></h1>
+<p>This page covers the OpenTelemetry instruments of both crates, their attributes and the views that
+bound their cost. Read it when you build dashboards or alerts on the library’s metrics.</p>
 <p>With the <code>opentelemetry</code> feature, kms-aead records OpenTelemetry metrics for every envelope call
 and KMS request. kms-aead-keyring’s <code>opentelemetry</code> feature turns it on, and the keyring records
 into the same instruments, with its own attributes. Both depend on the <code>opentelemetry</code> API crate
@@ -187,7 +189,7 @@ only (no SDK): the application installs the SDK and an exporter, such as OTLP wi
 crate depends on OpenTelemetry.</p>
 <p>The instruments come from the global meter provider, with an instrumentation scope named after
 kms-aead and its version, the first time either crate records, and stay bound to it for the life
-of the process. Be aware to install the provider before the first KMS, envelope or keyring call,
+of the process. Install the provider before the first KMS, envelope or keyring call,
 otherwise the instruments record nothing:</p>
 <pre><code class="language-rust">use opentelemetry::Key;
 use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
@@ -251,29 +253,40 @@ call has no <code>error.type</code>.</p>
 </tbody>
 </table>
 </div>
+<p>The values of the attributes that name the call:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attribute</th><th>Value</th><th>Recorded for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>kms_aead.operation</code> on the value instruments</td><td><code>encrypt</code>, <code>decrypt</code></td><td>a value’s encryption or decryption</td></tr>
+<tr><td></td><td><code>beacon</code></td><td>an envelope’s beacon</td></tr>
+<tr><td></td><td><code>generate_dek</code></td><td><code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code></td></tr>
+<tr><td></td><td><code>decrypt_dek</code></td><td><code>decrypt_deterministic_dek</code></td></tr>
+<tr><td></td><td><code>reencrypt_dek</code></td><td><code>reencrypt_dek</code>, <code>reencrypt_encrypted_dek</code> and the deprecated <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code></td></tr>
+<tr><td></td><td><code>stream_encrypt</code>, <code>stream_decrypt</code></td><td>the stream calls</td></tr>
+<tr><td></td><td><code>sign</code>, <code>verify</code>, <code>mac</code>, <code>verify_mac</code></td><td>a <code>Signer</code>, a <code>Verifier</code> and an <code>Authenticator</code></td></tr>
+<tr><td><code>kms_aead.operation</code> on <code>kms_aead.kms.duration</code></td><td><code>encrypt_dek</code>, <code>decrypt_dek</code>, <code>random</code>, <code>sign</code>, <code>public_key</code>, <code>encrypt_dek_with_public_key</code></td><td>the request to the KMS, or the local encryption with a public key</td></tr>
+<tr><td><code>kms_aead.mode</code></td><td><code>per_call</code>, <code>store_less</code></td><td>an envelope’s <code>encrypt</code>, <code>decrypt</code>, the stream calls, <code>reencrypt_dek</code> and <code>upgrade_legacy_value</code></td></tr>
+<tr><td></td><td><code>caller_dek</code></td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK, <code>reencrypt_encrypted_dek</code>, <code>upgrade_legacy_encrypted_dek</code>, and an <code>Authenticator</code>’s <code>mac</code> and <code>verify_mac</code></td></tr>
+<tr><td></td><td><code>signature</code></td><td>a <code>Signer</code> and a <code>Verifier</code></td></tr>
+<tr><td></td><td><code>keyring</code></td><td>a keyring’s calls</td></tr>
+</tbody>
+</table>
+</div>
 <ul>
 <li><code>kms_aead.plaintext.size</code> records the plaintext length of each value encrypted or decrypted: its
 count is the values, and its sum their bytes. It has no buckets. The SDK also keeps the smallest
 and the largest value of each series and OTLP exports them, unless a view turns them off as above.
 A failed call records no value;</li>
-<li><code>kms_aead.operation</code> of a value is <code>encrypt</code> or <code>decrypt</code>. The envelope also times <code>beacon</code>,
-<code>generate_dek</code> for <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>,
-<code>decrypt_dek</code> for <code>decrypt_deterministic_dek</code>, and <code>reencrypt_dek</code> for <code>reencrypt_dek</code>,
-<code>reencrypt_encrypted_dek</code> and the deprecated <code>upgrade_legacy_value</code> and
-<code>upgrade_legacy_encrypted_dek</code>;</li>
-<li><code>kms_aead.mode</code> is the envelope’s <code>per_call</code> or <code>store_less</code> for <code>encrypt</code>, <code>decrypt</code>, the
-stream calls, <code>reencrypt_dek</code> and <code>upgrade_legacy_value</code>, <code>caller_dek</code> for the <code>*_with_dek</code> and
-<code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK,
-<code>reencrypt_encrypted_dek</code> and <code>upgrade_legacy_encrypted_dek</code>, and <code>keyring</code> for a keyring’s
-calls. A <code>Signer</code> and a <code>Verifier</code> record <code>sign</code> and <code>verify</code> with the mode <code>signature</code>, and an
-<code>Authenticator</code> records <code>mac</code> and <code>verify_mac</code> with the mode <code>caller_dek</code>;</li>
 <li><code>kms_aead.algorithm</code> and <code>kms_aead.backend</code> are those of the span. <code>kms_aead.algorithm</code> is
 absent where it is unknown: on a re-encryption, in which the algorithm plays no part, on a probe,
 which runs under every version, and on a keyring call that fails before it finds its version. A keyring’s
 deterministic call has <code>kms_aead.backend</code> <code>rustcrypto</code>, since AES-SIV runs on RustCrypto
 whatever the keyring’s backend;</li>
 <li>a keyring call is recorded once, with <code>kms_aead.mode</code> <code>keyring</code>: it runs kms-aead’s ciphers, never
-its envelope. <code>encrypt</code> is an encryptor’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>decrypt</code> is
+its envelope, see the table of values above. <code>encrypt</code> is an encryptor’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>decrypt</code> is
 <code>decrypt</code>, <code>decrypt_with_trust</code> and their deterministic pair, <code>reencrypt</code> is <code>reencrypt</code> and
 <code>reencrypt_deterministic</code>, which also record the <code>decrypt</code> and <code>encrypt</code> they make, <code>beacon</code> is an
 encryptor’s <code>beacon</code>, and <code>probe</code> is <code>beacon_probes</code> and <code>deterministic_probes</code>.
@@ -284,9 +297,8 @@ output: HMAC takes no nonce, and its bound as a PRF is far beyond the values one
 Signatures and MACs record no value either. A keyring’s MAC calls add no keyring call of their
 own: the <code>Authenticator</code> they run records each one;</li>
 <li><code>kms_aead.kms.duration</code> covers the request to the KMS only, as the span’s <code>response_time</code> does.
-<code>kms_aead.operation</code> is <code>encrypt_dek</code>, <code>decrypt_dek</code>, <code>random</code>, <code>sign</code> or <code>public_key</code>, or
-<code>encrypt_dek_with_public_key</code> for an encryption with the public key of an asymmetric KEK, which is
-a local operation and no KMS request, so that the duration tells the two apart.
+<code>encrypt_dek_with_public_key</code> is an encryption with the public key of an asymmetric KEK, which is a
+local operation and no KMS request, so that the duration tells the two apart.
 <code>kms_aead.provider</code> is the span’s <code>provider</code>. The KEK name is left out;</li>
 <li><code>kms_aead.store.duration</code> covers every read of a keyring record, with the <code>store</code> and <code>reason</code>
 of the <code>Keyring load</code> span;</li>
@@ -311,9 +323,10 @@ the values and bytes under one keyring version, see
 <p>The keyring’s plaintext size has one time series per keyring, purpose, key version and operation.
 With a keyring per tenant, that is a series per tenant and version. Under cumulative temporality,
 the default, the SDK keeps a series until the process restarts, also once its version is no longer
-used. The SDK keeps at most 2000 attribute sets per instrument and records every further one into
-one series with the attribute <code>otel.metric.overflow</code>, with no error: an alert per version stops
-counting the versions past the limit. Raise the limit with
+used. The SDK keeps a limited number of attribute sets per instrument, 2000 by default, and records
+every further one into one series with the attribute <code>otel.metric.overflow</code>, with no error: an
+alert per version stops counting the versions past the limit. Check the limit of your SDK version,
+and raise it with
 <code>Stream::builder().with_cardinality_limit</code> in a view where the keyrings and their versions come near
 it. Key ids are numbered per keyring, so the plaintext size keeps
 <code>kms_aead.keyring</code>: without it, version 1 of every keyring would add up to one series. The

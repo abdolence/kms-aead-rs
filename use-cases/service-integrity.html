@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -186,7 +186,7 @@ an HMAC in process. The MAC does not hide the bytes, see <a href="../envelope-en
 for that. See <a href="../signing.html#macs-in-a-keyring">Signatures and MACs</a>.</p>
 <h2 id="keyring-macs"><a class="header" href="#keyring-macs">Keyring MACs</a></h2>
 <p>A keyring holds MAC key versions beside its other versions, encrypted by the KEK and rotated, flagged
-and retired as the others are. Create the keyring with a MAC algorithm, HMAC-SHA256 or HMAC-SHA512.
+and retired as the others are. Create the keyring with a MAC algorithm, see <a href="../signing.html#macs-in-a-keyring">MACs in a keyring</a>.
 A service that writes calls <code>mac_attached</code> on its <code>Encryptor</code>, and a service that reads calls
 <code>verify_with_mac</code>. The type that is authenticated implements <code>SignableType</code>, whose payload type
 separates one kind of message from another: a MAC over a job never verifies as a cache entry. The
@@ -269,14 +269,15 @@ services:</p>
 </table>
 </div>
 <p>A webhook your customers verify, a release, and a record whose writer must be told apart from its
-readers are signatures. See <a href="./publish-verifiable.html">Publish content anyone can verify</a>, and
+readers are signatures. See <a href="./publish-verifiable.html">Publish a rate sheet or a release anyone can verify</a>, and
 <a href="../production/signed-records.html">Protect the keyring record</a> for the keyring’s own record.</p>
 <h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
 <ul>
 <li>Nothing outside the payload type and the payload is authenticated. A message that must not be
 replayed carries a timestamp or a nonce, and a message for one recipient names it;</li>
-<li>a process on 0.30 refuses a record that holds a MAC version, so move every process to 0.31 before
-the keyring gets its first MAC version.</li>
+<li>a process on a version that predates MACs refuses a record that holds a MAC version, so upgrade
+every process that reads the keyring before it gets its first MAC version, see
+<a href="../migrating-from-0.30.html#readers-before-producers">Readers before producers</a>.</li>
 </ul>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/mac.rs">here</a>.</p>

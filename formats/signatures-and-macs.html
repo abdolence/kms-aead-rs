@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,8 +179,9 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="signature-and-mac-formats"><a class="header" href="#signature-and-mac-formats">Signature and MAC formats</a></h1>
-<p>The layouts of signatures and MACs, what they are computed over, the key ids of signing keys and
-the test vectors. The layouts of every kind of value are listed on <a href="../formats.html">Formats</a>.</p>
+<p>This page has the layouts of signatures and MACs, what they are computed over, the key ids of
+signing keys and the test vectors. Read it to verify a signature or a MAC outside the library. The
+layouts of every kind of value are listed on <a href="../formats.html">Formats</a>.</p>
 <p>Detached and attached signatures and MACs are Tink-prefixed values:</p>
 <div class="table-wrapper">
 <table>
@@ -257,11 +258,11 @@ pre-image = PAE("application/vnd.kms-aead.keyring-record+json", SHA-256(canonica
 <p>JCS is the JSON Canonicalization Scheme of <a href="https://www.rfc-editor.org/rfc/rfc8785">RFC 8785</a>:
 members sorted by name, no whitespace, standard string escaping with non-ASCII kept as UTF-8 and
 control characters as <code>\u00XX</code>. It is computed over the parsed JSON document with every member
-kept, including members this release does not know, so a later release may add members and sign
+kept, including members the reader does not know, so a newer release may add members and sign
 records that carry them. A record holds strings, integers, booleans, <code>null</code>, arrays and objects; a
 fraction, an exponent or an integer beyond 2^53 anywhere in it is <code>RECORD_INVALID</code>. The canonical
 document of a record with a <code>null</code>, a nested <code>compromised</code>, a note holding <code>é</code> and the control
-character <code>0x07</code>, and a member <code>future</code> this release does not define, on one line of 579 bytes
+character <code>0x07</code>, and a member <code>future</code> the reader does not define, on one line of 579 bytes
 without the line breaks shown here:</p>
 <pre><code class="language-text">{"algorithms":{"beacon":null,"deterministic":null,"mac":null,"randomized":"aes-256-gcm"},
 "created_at":"2026-10-25T09:00:00Z","future":{"a":[true,null],"b":1},"id":"tenant-42",
@@ -277,7 +278,7 @@ bytes <code>c3 a9</code>. The pre-image is <code>DSSEv1 44 application/vnd.kms-a
 digest, 90 bytes. Under the Ed25519 key of the vectors below the stored member is
 <code>"signature": "AZD6yv6RAlxJsp1uzsdIQxlvyawlD282Dfrtg3QthYeSPnQ02B6jbpOBFA65Y2Zq5lILiXyyTCxj9bv36JGSWC2H2UAG"</code>.</p>
 <h2 id="signature-and-mac-test-vectors"><a class="header" href="#signature-and-mac-test-vectors">Signature and MAC test vectors</a></h2>
-<p>Generated with Python’s <code>cryptography</code> 50.0.2 from published keys, so that nothing in them is
+<p>Generated with Python’s <code>cryptography</code> package from published keys, so that nothing in them is
 secret. Payload type <code>application/vnd.example.invoice+json</code>, payload
 <code>{"number":"INV-1042","customer":"Northwind Traders","currency":"EUR","total_cents":12500}</code>:</p>
 <pre><code class="language-text">SHA-256(payload)       7b43154b748a12c6909cba38acd83fff12a11b6345effb807b21c7ce465e4cd1

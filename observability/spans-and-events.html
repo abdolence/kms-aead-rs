@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,8 +179,9 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="spans-and-events"><a class="header" href="#spans-and-events">Spans and events</a></h1>
-<p>The spans and events of kms-aead and kms-aead-keyring, and the fields of each span. What they never
-carry is on <a href="../observability.html#what-is-never-logged">Observability</a>.</p>
+<p>This page has the spans and events of kms-aead and kms-aead-keyring, and the fields of each span.
+Read it to filter the library’s logs, to build traces, or to find the log line behind an alert. What
+they never carry is on <a href="../observability.html#what-is-never-logged">Observability</a>.</p>
 <h2 id="spans"><a class="header" href="#spans">Spans</a></h2>
 <p>The library uses <a href="https://github.com/tokio-rs/tracing">tracing</a>. Every envelope call and every KMS
 call opens one span at the <code>DEBUG</code> level, and the spans carry what a call used besides how long it
@@ -311,8 +312,7 @@ calls do. The spans carry no payload, signature, tag or key bytes.</p>
 <p>Besides the spans, the library logs:</p>
 <ul>
 <li><code>WARN</code>, inside the KMS span: a GCP or Vault Transit response without a key version;</li>
-<li><code>WARN</code>, once per process and layout: the first read of a layout of 0.29 or earlier with
-<code>legacy-formats</code>;</li>
+<li><code>WARN</code>, once per process and layout: the first read of a legacy layout with <code>legacy-formats</code>;</li>
 <li><code>WARN</code>, when a Vault Transit provider is created: an <code>http</code> address to another host, or a system
 CA certificate that cannot be loaded;</li>
 <li><code>WARN</code>, on the <code>kms_aead::json</code> target: a <code>JsonEncoded</code> value that does not decode, see
@@ -350,17 +350,15 @@ away the length of the values before them. The library logs one <code>WARN</code
 </div>
 <p>By default the outline shows the shape of the JSON: the type of every value, <code>&lt;key&gt;</code> for every
 key, the nesting, and where serde_json stopped reading it, with serde_json’s message for a syntax
-error. That message is fixed text, and it can state a property of a value the outline hides, such
-as <code>number out of range</code>, <code>invalid unicode code point</code> or <code>unexpected end of hex escape</code>. The
-default shows no length and no position, since <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">a length gives away a hidden
-boolean</a>.</p>
+error. That message can state a property of a value the outline hides, and the default shows no
+length and no position, see <a href="../observability.html#what-is-never-logged">What is never logged</a>.</p>
 <p>A type opts into more with a policy, the second type parameter of <code>JsonEncoded</code>.
 A signed payload is often public, so its policy may show more than an encrypted plaintext’s. See
 <a href="../stored-values.html#json-that-does-not-decode">JSON that does not decode</a> for a policy and the
 outlines it produces.
 <code>kms_aead::json=off</code> in an <code>EnvFilter</code> turns the event off.</p>
 <p>An application outlines JSON of its own with <code>RedactedJson</code>, with no encryption involved, see
-<a href="../use-cases/log-json-payloads.html">Log JSON payloads without leaking data</a>.</p>
+<a href="../use-cases/log-json-payloads.html">Log a webhook payload that failed to parse</a>.</p>
 <h2 id="keyring-spans"><a class="header" href="#keyring-spans">Keyring spans</a></h2>
 <p>The <code>kms-aead-keyring</code> crate follows the same rules: one <code>DEBUG</code> span per call, field names with
 the <code>/kms_aead_keyring/</code> prefix, and nothing recorded for a value nobody reported. kms-aead’s spans
@@ -431,7 +429,8 @@ KEK anyone holding the public key can plant a version, see <a href="../asymmetri
 KEK</a>;</li>
 <li><code>WARN</code>: a <code>KeyringAdmin</code> without a record signer built over a provider whose
 <code>encrypts_with_public_key()</code> is <code>true</code>;</li>
-<li><code>WARN</code>: a failed revalidation, the cached record staying in use;</li>
+<li><code>WARN</code>: a failed revalidation, “The keyring record could not be revalidated; the cached record
+stays in use”. The process misses every change until the store answers again, so alert on it;</li>
 <li><code>WARN</code>: “The keyring store no longer holds the keyring record; every version is destroyed in this
 process”, when a read finds the record gone: the process then holds the record with every
 version destroyed and stops revalidating the keyring, see

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -181,7 +181,11 @@
                         <h1 id="envelope-encryption"><a class="header" href="#envelope-encryption">Envelope encryption</a></h1>
 <p><code>KmsAeadEnvelope</code> encrypts values under data encryption keys (DEKs) on the crypto backend it is
 built with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
-<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="./observability/spans-and-events.html">Observability</a>.</p>
+<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="./observability/spans-and-events.html">Spans and events</a>.</p>
+<p>This page specifies the calls of <code>KmsAeadEnvelope</code>. To encrypt the columns of a table, read
+<a href="./use-cases/encrypt-fields.html">Encrypt personal data and secrets in your database</a>. To make fewer
+KMS calls, read <a href="./use-cases/fewer-kms-calls.html">Cut KMS calls with a DEK cache and DEK reuse</a>. To
+rotate the KEK, read <a href="./production/rotation.html">Rotate keys and re-encrypt values</a>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
@@ -204,10 +208,10 @@ let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(
 </span><span class="boring">}</span></code></pre>
 <p>The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
-<a href="./crypto-backends.html">Crypto backends</a>. The default, AES-256-GCM, is read by every Tink
-implementation too, see <a href="./formats/values.html#tinks-kms-envelope">Formats</a>. Values that 0.29 and earlier
-encrypted under their default decrypt only with ChaCha20-Poly1305 configured, see
-<a href="./migrating-from-0.29.html#default-algorithm">Migrating from 0.29</a>.</p>
+<a href="./crypto-backends.html">Crypto backends</a>. The default, AES-256-GCM, is read by every
+implementation of Tink, Google’s cryptography library, too, see <a href="./formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a>. Values that
+an older release encrypted under another default are covered by <a href="./migrating-from-0.29.html#default-algorithm">Default
+algorithm</a>.</p>
 <p>Over a provider that only encrypts, such as the <code>PublicKeyKekProvider</code> of a producer, the envelope
 has the calls that encrypt: <code>encrypt</code>, <code>encrypt_with_dek</code> and the <code>generate_encrypted_*</code> calls.
 The calls that decrypt a DEK or a value, from <code>decrypt</code> to the re-encryptions, need a provider
@@ -244,8 +248,8 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 </span><span class="boring">}</span></code></pre>
 <p>The bytes in and out of an <code>Encrypted</code> are in <a href="./stored-values.html#bytes-in-and-out">Stored values</a>.</p>
 <p>The value is in Tink’s KMS envelope format for every provider, so Tink’s <code>KmsEnvelopeAead</code> reads
-it with the same KMS key and algorithm, see <a href="./formats/values.html#tinks-kms-envelope">Formats</a>.</p>
-<p>A new DEK comes from the backend’s CSPRNG, or from the KMS generator when the provider is
+it with the same KMS key and algorithm, see <a href="./formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a>.</p>
+<p>A new DEK comes from the backend’s CSPRNG (cryptographically secure random number generator), or from the KMS generator when the provider is
 configured to use one, see <a href="./providers.html#kms-random-generators">KMS random generators</a>.</p>
 <h2 id="typed-fields"><a class="header" href="#typed-fields">Typed fields</a></h2>
 <p><code>encrypt</code> and <code>decrypt</code> take a value of any type that implements <code>Plaintext</code>, such as an
@@ -301,8 +305,8 @@ assert_eq!(decrypted, SecretValue::from("second"));
 <li><code>encrypt_with_encrypted_dek</code> and <code>decrypt_with_encrypted_dek</code>: with an encrypted DEK, decrypted
 through the envelope’s DEK cache, so one KMS call per call without a cache.</li>
 </ul>
-<p>Be aware not to encrypt more than about 2^32 values under one DEK: every value takes a random 96-bit
-nonce, see <a href="./security.html#nonces">Security considerations</a>.</p>
+<p>Be aware of the number of values one DEK encrypts: every value takes a random 96-bit nonce, which
+bounds the count, see <a href="./security.html#nonces">Nonces</a>.</p>
 <h2 id="storing-encrypted-deks"><a class="header" href="#storing-encrypted-deks">Storing encrypted DEKs</a></h2>
 <p><code>EncryptedDataEncryptionKey</code> holds the bytes the provider returned, which also name the KMS key
 version where the KMS needs one to decrypt after a rotation. Store <code>value()</code> or <code>to_hex_string()</code>,
@@ -341,16 +345,16 @@ KEK that encrypted it, as the KMS reported it. It is <code>None</code> under AWS
 names no key material, and wherever the KMS reported no version. Decryption never needs it, and neither
 <code>value()</code> nor <code>to_hex_string()</code> holds it, so an encrypted DEK read back from them has none. Stored
 beside the encrypted DEK, it shows without a KMS call which DEKs are still under an old KEK
-version, see <a href="./production/reencrypt-deks.html#the-check">The check</a>. <code>with_kek_version</code> puts it back on the encrypted DEK read
-from the bytes.</p>
+version, see <a href="./production/reencrypt-deks.html#the-check">The check</a>. <code>with_kek_version</code> puts it back
+on the encrypted DEK read from the bytes.</p>
 <p>Equality and hashing take the bytes alone, so an encrypted DEK read back without its KEK version is
 the same key, to the DEK cache and in a map, as the one the provider returned with it.</p>
 <p>The encrypted DEK is the one Tink stores in its KMS envelope, so <code>Encrypted::join</code> of a bare value
 and its encrypted DEK is an <code>Encrypted&lt;T, Envelope&gt;</code> that Tink reads. See
-<a href="./formats/values.html#encrypted-deks">Formats</a> for each provider’s bytes.</p>
+<a href="./formats/values.html#encrypted-deks">Encrypted DEKs</a> for each provider’s bytes.</p>
 <h2 id="re-encrypting-deks"><a class="header" href="#re-encrypting-deks">Re-encrypting DEKs</a></h2>
 <p>After a KEK rotation, a DEK stored before it keeps decrypting with the old KEK version only. Two
-calls move a stored DEK to the version the provider encrypts with now, without decrypting any value:</p>
+calls move a stored DEK to the version the provider encrypts with, without decrypting any value:</p>
 <ul>
 <li><code>reencrypt_dek</code> takes an <code>Encrypted&lt;T, Envelope&gt;</code> and returns it with its DEK under the current
 version;</li>
@@ -359,8 +363,8 @@ their values, such as those of the <code>*_with_encrypted_dek</code> calls, of b
 fields, and for a DEK that many values share.</li>
 </ul>
 <p>Each call makes two KMS calls, a decryption and an encryption, and never goes through the DEK
-cache. A value or a DEK in a layout of 0.29 or earlier fails with <code>LEGACY_FORMAT</code>:
-<code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, see
+cache. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>: <code>upgrade_legacy_value</code> and
+<code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, see
 <a href="./migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>.</p>
 <p>The order of a rotation, the sweep, the checks around the disable of the old version and the
 rollback are in <a href="./production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>.</p>

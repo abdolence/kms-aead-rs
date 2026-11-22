@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -182,8 +182,12 @@
 <p>Feature <code>hashicorp-vault-transit-kms-encryption</code>, or one root store and one crypto provider
 variant, see <a href="../features.html">Cargo features</a>.</p>
 <p>The provider encrypts DEKs with a key of the Vault Transit secrets engine. <code>HcVaultTransitKeyRef</code>
-names the key, and the mount is <code>transit</code> unless set with <code>with_mount</code>. How the KMS providers
-compare is in <a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</p>
+names the key, and the mount is <code>transit</code> unless set with <code>with_mount</code>.</p>
+<p>This page specifies <code>HcVaultTransitProvider</code>. To compare it with the other KMS providers, read
+<a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>. For the rights the
+applications and the administration need, read <a href="../production/permissions.html">Permissions: applications and
+administration</a>. For rotating the KEK, read <a href="../production/rotation.html">Rotate keys and
+re-encrypt values</a>.</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
 use kms_aead::providers::{HcVaultTransitKeyRef, HcVaultTransitProvider};
 use kms_aead::KmsAeadEnvelope;
@@ -324,9 +328,9 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 sends the first one.</p>
 <ul>
 <li><code>sign</code> posts to <code>&lt;mount&gt;/sign/&lt;key&gt;</code> with <code>input</code>, <code>key_version</code>, <code>hash_algorithm</code> <code>sha2-256</code> and
-<code>marshaling_algorithm</code> <code>jws</code>. The <code>input</code> is the base64 of the pre-image for Ed25519, and for
+<code>marshaling_algorithm</code> <code>jws</code>. The <code>input</code> is the base64 of the pre-image (the exact bytes a signature covers, see <a href="../formats/signatures-and-macs.html">Signature and MAC formats</a>) for Ed25519, and for
 P-256 the base64 of its SHA-256 with <code>prehashed</code> set;</li>
-<li>Vault answers <code>vault:vN:&lt;base64url&gt;</code> with the 64-byte Ed25519 signature, or <code>r || s</code> for P-256. An <code>N</code> other than the configured version
+<li>Vault answers <code>vault:vN:&lt;base64url&gt;</code> with the 64-byte Ed25519 signature, or <code>r || s</code> (the two 32-byte integers of an ECDSA signature, one after the other) for P-256. An <code>N</code> other than the configured version
 fails with <code>SIGNING_KEY_MISMATCH</code>, and a signature that is not base64url without padding or not
 64 bytes with <code>SIGNATURE_ENCODING</code>;</li>
 <li><code>verifying_key</code> reads <code>&lt;mount&gt;/keys/&lt;key&gt;</code> and takes the <code>public_key</code> of the configured version:

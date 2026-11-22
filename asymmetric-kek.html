@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -189,6 +189,11 @@ encrypts DEKs with RSA-OAEP (RSA encryption with Optimal Asymmetric Encryption P
 SHA-256 and an empty label, <code>AsymmetricKekAlgorithm::RsaOaepSha256</code>, on RSA keys of 3072 bits for a
 new key; 2048 and 4096 are accepted, and 2048 is deprecated. Cloud KMS, AWS KMS, Azure Key Vault,
 Vault Transit and the local KMS decrypt it.</p>
+<p>This page specifies the keys, the three sides of a deployment, the public key and what the
+compile-time guarantee covers. To build a deployment that accepts data from producers that cannot
+read it back, read <a href="./use-cases/write-only-producers.html">Accept data from partners and devices that cannot read it
+back</a> first. A keyring under an asymmetric KEK needs signed
+records, see <a href="./production/signed-records.html">Protect the keyring record</a>.</p>
 <h2 id="which-way-the-keys-go"><a class="header" href="#which-way-the-keys-go">Which way the keys go</a></h2>
 <p>With an asymmetric KEK the public key encrypts and the private key decrypts, as in every public-key
 encryption. The other direction is a signature, see <a href="./signing.html">Signatures and MACs</a>:</p>
@@ -221,8 +226,8 @@ gives no origin. Data that must be both confidential and attributable is encrypt
 </tbody>
 </table>
 </div>
-<p>The readers use the providers they use today. They read the new layout by its first byte, and a
-provider decrypts the DEKs the KMS encrypted beside the DEKs a public key encrypted. The producer is
+<p>The readers keep the providers they have. A provider tells a DEK that a public key encrypted from
+one the KMS encrypted by its first byte, and decrypts both. The producer is
 an envelope writer and encrypts randomised values only: a beacon and a deterministic value both need
 a key’s plaintext, which only a reader decrypts. A keyring never has a producer, since encrypting
 under a keyring version needs the version’s plaintext DEK. What an asymmetric KEK changes in a
@@ -262,21 +267,8 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 </span><span class="boring">}</span></code></pre>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/asymmetric_kek.rs">here</a>.</p>
-<p>The KMS rights per provider:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>KMS</th><th>Reader</th><th>Administration, in addition</th></tr>
-</thead>
-<tbody>
-<tr><td>Google Cloud KMS</td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code></td><td><code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, which <code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry</td></tr>
-<tr><td>AWS KMS</td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:GetPublicKey</code> on the key</td></tr>
-<tr><td>Azure Key Vault</td><td><code>keys/unwrap/action</code></td><td><code>keys/get</code></td></tr>
-<tr><td>Vault Transit</td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>read</code> on <code>transit/keys/&lt;key&gt;</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>No side needs a KMS encrypt right. Be aware the KMS audit log no longer shows who encrypted a DEK:
+<p>The KMS rights per provider are in <a href="./production/permissions.html#under-an-asymmetric-kek">Under an asymmetric KEK</a>.
+No side needs a KMS encrypt right. Be aware the KMS audit log does not show who encrypted a DEK:
 the encryption is a local operation. The decrypt log stays.</p>
 <h2 id="the-public-key"><a class="header" href="#the-public-key">The public key</a></h2>
 <p>An <code>AsymmetricKekPublicKey</code> holds the key and what a reader needs to decrypt:</p>
@@ -291,7 +283,7 @@ needed, with <code>ASYMMETRIC_KEK_PUBLIC_KEY</code>;</li>
 Cloud KMS and Transit write it, or <code>Jwk</code> as Key Vault returns it. <code>Raw</code> has no meaning for an RSA
 key.</li>
 </ul>
-<p>The administration fetches it with the right of the table above, on the provider it holds:
+<p>The administration fetches it with the read right of the public key, on the provider it holds:
 <code>GcpKmsProvider::public_key(&amp;version)</code>, <code>AwsKmsProvider::public_key()</code>,
 <code>AzureKmsProvider::public_key(None)</code> for the latest version, <code>HcVaultTransitProvider::public_key(None)</code>
 and <code>LocalAsymmetricKmsProvider::public_key(None)</code>. Each reads the version from the KMS’s response,
@@ -315,14 +307,10 @@ one test value and decrypt it with a reader before a new producer writes anythin
 </tbody>
 </table>
 </div>
-<p>ring has no RSA encryption, so a producer or a local private half on <code>Ring</code> fails at construction
-with <code>KmsAeadError::UnsupportedAlgorithm</code>. A reader on <code>Ring</code> needs nothing of RSA.</p>
-<p>The <code>rustcrypto</code> feature adds the <a href="https://crates.io/crates/rsa"><code>rsa</code></a> crate for
-RSA-OAEP. Its private-key operation runs only in a <code>LocalAsymmetricKmsProvider</code> on RustCrypto.
-Encrypting with the public key is a public-key operation with no private key to leak, and a cloud
-reader runs no RSA. Every application that enables <code>rustcrypto</code> carries <code>rsa</code> in its lockfile. A
-local KMS on RustCrypto decrypts DEKs from trusted sources only, such as its own keyring record. A
-process that decrypts what others send runs its private half on <code>AwsLc</code>, or in a KMS.</p>
+<p>A producer or a local private half on <code>Ring</code> fails at construction with
+<code>KmsAeadError::UnsupportedAlgorithm</code>. A reader on <code>Ring</code> needs nothing of RSA. The <code>rsa</code> crate that
+the <code>rustcrypto</code> feature adds, and why a local KMS on RustCrypto decrypts DEKs from trusted sources
+only, are in <a href="./crypto-backends.html#rustcrypto">Crypto backends</a>.</p>
 <h2 id="the-compile-time-guarantee"><a class="header" href="#the-compile-time-guarantee">The compile-time guarantee</a></h2>
 <p><code>PublicKeyKekProvider</code> implements <code>KmsAeadEncryptionProvider</code> and not <code>KmsAeadDecryptionProvider</code>.
 Every call that decrypts a DEK or a value requires the second: <code>decrypt</code>, the
@@ -362,7 +350,8 @@ and a keyring stays under the key it was created with.</p>
 asymmetric KEK already: Key Vault’s <code>wrapKey</code> operation, which encrypts a DEK, is the RSA-OAEP
 encryption its public key would make. Nothing stored has to be re-encrypted:</p>
 <ol>
-<li>deploy 0.31 to every reader first. 0.30 reads no DEK encrypted with a public key;</li>
+<li>upgrade every reader first to a version that reads a DEK encrypted with a public key, see
+<a href="./migrating-from-0.30.html#readers-before-producers">Readers before producers</a>;</li>
 <li>for a keyring, turn record signing on before any DEK is encrypted with a public key: give the
 administration a record signer, run <code>sign_record</code> on every keyring, then set
 <code>RecordSignaturePolicy::Required</code> on every application;</li>
@@ -373,7 +362,7 @@ choice;</li>
 <li>hand the public key to the producers, which switch from a KMS provider to a
 <code>PublicKeyKekProvider</code> and drop their KMS rights;</li>
 <li>take <code>keys/wrap/action</code>, or <code>update</code> on <code>transit/encrypt/&lt;key&gt;</code>, out of the administration’s
-grant once no 0.30 administration remains.</li>
+grant once no administration that encrypts through the KMS remains.</li>
 </ol>
 <p>A keyring on a Cloud KMS or AWS symmetric key cannot move to an asymmetric key: a keyring stays
 under the KEK it was created with. A new asymmetric key is a new keyring, filled by a sweep.</p>
@@ -393,8 +382,9 @@ the reader one asymmetric KMS decryption;</li>
 no value decrypt;</li>
 <li>RSA is not quantum-safe. An encrypted DEK kept in a record, a value or a backup decrypts for
 whoever later runs a cryptographically relevant quantum computer against the public key. Data
-whose confidentiality must outlast RSA stays under a symmetric KEK until a KMS decapsulates a
-post-quantum KEM in general availability, which none does today;</li>
+whose confidentiality must outlast RSA stays under a symmetric KEK until a supported KMS
+decapsulates a post-quantum KEM (key encapsulation mechanism, the public-key way to agree on a
+key) in general availability;</li>
 <li>the producer’s DEK cache holds plaintext DEKs, as every store-less writer’s does;</li>
 <li>the local KMS’s private half is in process memory, with no IAM, no audit log and no HSM.</li>
 </ul>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -180,7 +180,9 @@
                     <main>
                         <h1 id="observability"><a class="header" href="#observability">Observability</a></h1>
 <p>kms-aead and kms-aead-keyring report what they do through
-<a href="https://github.com/tokio-rs/tracing">tracing</a> spans and events, and through OpenTelemetry metrics:</p>
+<a href="https://github.com/tokio-rs/tracing">tracing</a> spans and events, and through OpenTelemetry metrics.
+This page lists the two pages that hold them and states what neither ever logs; read it before you
+enable the spans in a pipeline that other people can read:</p>
 <ul>
 <li><a href="./observability/spans-and-events.html">Spans and events</a>: one <code>DEBUG</code> span for every envelope call,
 KMS call and keyring call, with the fields of each; the events both crates log; how to show the

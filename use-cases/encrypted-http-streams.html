@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -192,7 +192,8 @@ a time;</li>
 <li>the client passes the bytes of the response to <code>decrypting_stream</code> of the envelope, and hands
 the plaintext to the decoder of <a href="https://github.com/abdolence/reqwest-streams-rs">reqwest-streams</a>;</li>
 <li>the format knows nothing about encryption, and the envelope knows nothing about items. The
-body is one Cobblestone stream in the envelope form, so the KMS is called as for any streamed
+body is one Cobblestone stream in the envelope form, the chunked encryption format of the C2SP
+specification, see <a href="../streaming.html#format">Format</a>, so the KMS is called as for any streamed
 value: one encryption per new DEK, one decryption per response per DEK cache TTL, see
 <a href="../dek-caching.html">DEK caching and reuse</a>.</li>
 </ul>
@@ -313,8 +314,7 @@ ends the body with an error and cannot change the status;</li>
 and the client should check its value against the formats it decodes;</li>
 <li>ciphertext does not compress, so a compression layer on the route gains nothing;</li>
 <li>the AAD must be the same on both sides. A value that names the export, the tenant or the user
-keeps a body from decrypting under another route, see
-<a href="../keyring/fields.html">Encrypted fields and AAD</a>.</li>
+keeps a body from decrypting under another route, see <a href="../envelope-encryption.html#aad">AAD</a>.</li>
 </ul>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/axum_encrypted_stream.rs">here</a>.</p>

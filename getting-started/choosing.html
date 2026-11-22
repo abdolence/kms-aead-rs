@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -207,7 +207,7 @@ crypto-shredded:</p>
 <a href="../formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a>, and keyring keysets with
 <code>KeysetHandle.read</code>, see <a href="../keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>;</li>
 <li>BigQuery’s <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only, see
-<a href="../use-cases/bigquery-and-tink.html">Read values in BigQuery or Tink</a>;</li>
+<a href="../use-cases/bigquery-and-tink.html">Decrypt columns in BigQuery SQL or with Tink</a>;</li>
 <li>the KEK version decides how a KEK rotation is checked before the old version is disabled, see
 <a href="../production/rotation.html#kek-rotation">Rotate keys and re-encrypt values</a>. Each provider page has its
 rotation, under “Key versions and rotation”: <a href="../providers/gcp.html">Google Cloud KMS</a>,
@@ -244,17 +244,16 @@ Vault Transit, with the rules in <a href="../features.html#feature-rules">Featur
 decrypts the values of any other, so a move from one backend to another needs no migration of the
 data, see <a href="../crypto-backends.html#cross-backend-compatibility">Cross-backend compatibility</a>.</p>
 <ul>
-<li><strong>Producers under an asymmetric KEK</strong>: a producer that encrypts DEKs with a public key fails at
-construction with <code>UNSUPPORTED_ALGORITHM</code> on <code>ring</code>, which has no RSA encryption. Readers need
-nothing of RSA on any backend, see <a href="../use-cases/write-only-producers.html">Writers that can never read</a>;</li>
-<li><strong>No second crypto library</strong>: the default features of the four cloud providers already build
-aws-lc-rs for TLS, so <code>aws-lc</code> adds nothing to a provider build;</li>
+<li><strong>Producers under an asymmetric KEK</strong>: a producer needs a backend with RSA encryption, so it
+cannot run on <code>ring</code>. Readers need nothing of RSA on any backend, see <a href="../use-cases/write-only-producers.html">Accept data from partners and devices that cannot read it back</a>;</li>
+<li><strong>No second crypto library</strong>: the default features of the cloud providers already build
+aws-lc-rs for TLS, so <code>aws-lc</code> adds nothing to a provider build, see <a href="../crypto-backends.html#aws-lc-rs-and-fips">aws-lc-rs and FIPS</a>;</li>
 <li><strong>FIPS</strong>: <code>aws-lc-fips</code> runs the backend on the AWS-LC FIPS module and moves every user of
 aws-lc-rs in the build to it, the rustls provider included. AES-256-GCM is the algorithm for a
 FIPS deployment. AES-SIV, the deterministic algorithm, is not FIPS-approved and runs on RustCrypto
 whatever the backend, so deterministic fields stay outside the validated boundary, see
 <a href="../crypto-backends.html#aws-lc-rs-and-fips">aws-lc-rs and FIPS</a>;</li>
-<li><strong>No C toolchain</strong>: <code>rustcrypto</code> is pure Rust, with <code>getrandom</code> as the CSPRNG;</li>
+<li><strong>No C toolchain</strong>: <code>rustcrypto</code> is pure Rust;</li>
 <li><strong>Zeroisation</strong>: what each backend leaves in freed memory is in
 <a href="../crypto-backends.html#ring">Crypto backends</a>.</li>
 </ul>

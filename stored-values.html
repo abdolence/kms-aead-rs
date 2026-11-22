@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,7 +179,11 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="stored-values"><a class="header" href="#stored-values">Stored values</a></h1>
-<p>Three types carry what the library writes to a data store and reads back:</p>
+<p>This page specifies the types that carry what the library writes to a data store and reads back,
+and how they are stored. To encrypt the columns of a table, start with <a href="./use-cases/encrypt-fields.html">Encrypt personal data and
+secrets in your database</a>. The bytes of each layout are in
+<a href="./formats/values.html">Values and DEKs</a>.</p>
+<p>Three types are involved:</p>
 <ul>
 <li><code>Encrypted&lt;T, F&gt;</code>: an encrypted value that decrypts to a <code>T</code>, in the layout of the format <code>F</code>;</li>
 <li><code>Beacon&lt;T&gt;</code>: a blind index of a <code>T</code>, stored beside its encrypted value for lookups;</li>
@@ -194,19 +198,20 @@ to store.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Format</th><th>Layout</th><th>Written by</th><th>Read by</th><th><code>key_id()</code></th><th>Equality</th></tr>
+<tr><th>Format</th><th>Holds</th><th>Written by</th><th>Read by</th><th><code>key_id()</code></th><th>Equality</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Envelope</code></td><td><a href="./formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a>, the encrypted DEK inside</td><td><code>KmsAeadEnvelope::encrypt</code></td><td><code>KmsAeadEnvelope::decrypt</code></td><td>no</td><td>none</td></tr>
-<tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td><code>KmsAeadEnvelope::encrypt_with_dek</code>, <code>AeadCipher::encrypt_bare</code></td><td><code>KmsAeadEnvelope::decrypt_with_dek</code>, <code>AeadCipher::decrypt_bare</code></td><td>no</td><td>none</td></tr>
-<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td><code>AeadCipher::encrypt</code>, <code>Encryptor::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
-<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td><code>DeterministicCipher::encrypt</code>, <code>Encryptor::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
+<tr><td><code>Envelope</code></td><td>the value and its encrypted DEK, in <a href="./formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a></td><td><code>KmsAeadEnvelope::encrypt</code></td><td><code>KmsAeadEnvelope::decrypt</code></td><td>no</td><td>none</td></tr>
+<tr><td><code>Bare</code></td><td>the AEAD output alone</td><td><code>KmsAeadEnvelope::encrypt_with_dek</code>, <code>AeadCipher::encrypt_bare</code></td><td><code>KmsAeadEnvelope::decrypt_with_dek</code>, <code>AeadCipher::decrypt_bare</code></td><td>no</td><td>none</td></tr>
+<tr><td><code>Randomized</code></td><td>the AEAD output after a key id</td><td><code>AeadCipher::encrypt</code>, <code>Encryptor::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
+<tr><td><code>Deterministic</code></td><td>the AES-SIV output after a key id</td><td><code>DeterministicCipher::encrypt</code>, <code>Encryptor::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><code>key_id()</code> returns the <code>KeyId</code> that the TINK prefix names, the key to decrypt the value with. The
-prefix is not authenticated: a changed key id fails to decrypt;</li>
+<li><code>key_id()</code> returns the <code>KeyId</code> that the Tink output prefix names, the key to decrypt the value
+with. The prefix is the byte <code>0x01</code> and the key id, at the start of the value. It is not
+authenticated: a changed key id fails to decrypt;</li>
 <li>an <code>Envelope</code> value carries its encrypted DEK instead of a key id, and a <code>Bare</code> value names no
 key: the application keeps track of the key that decrypts it;</li>
 <li>the randomised formats encrypt equal plaintexts into different values, so they have no <code>==</code>.
@@ -215,16 +220,17 @@ Compare <code>value()</code> to tell whether two values are the same stored byte
 what a lookup by the encrypted value needs, see <a href="./deterministic.html">Deterministic encryption</a>;</li>
 <li><code>Debug</code> shows the length only.</li>
 </ul>
-<p>See <a href="./formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a> for the shortest value of each
-layout and the layouts of 0.29 and earlier.</p>
+<p>See <a href="./formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a> for the layout and the shortest
+value of each format, and <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Values written by 0.29 and
+earlier</a> for the legacy layouts.</p>
 <h3 id="bytes-in-and-out"><a class="header" href="#bytes-in-and-out">Bytes in and out</a></h3>
 <p><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>to_hex_string()</code> returns them as
 lowercase hex. The only ways back are <code>Encrypted::try_from</code> for bytes and
 <code>Encrypted::try_from_hex_string</code> for hex in either case. Both check the bytes against the layout
 of <code>F</code> before any KMS call, so a truncated or foreign value fails when it is read, with
 <code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_HEX</code>, or <code>LEGACY_FORMAT</code> for
-a layout of 0.29 or earlier without the <code>legacy-formats</code> feature. The check reads the framing
-only: a changed value fails to decrypt with <code>DECRYPT</code>.</p>
+a legacy layout without the <code>legacy-formats</code> feature. The check reads the framing only: a changed
+value fails to decrypt with <code>DECRYPT</code>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Randomized;
 use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, KeyId};
@@ -359,15 +365,13 @@ the value travels as text.</p>
 <h2 id="beacont"><a class="header" href="#beacont"><code>Beacon&lt;T&gt;</code></a></h2>
 <p>A beacon, or blind index, is a truncated HMAC-SHA256 of a <code>T</code>’s plaintext under a beacon key. It is
 stored beside the field’s encrypted value, which stays randomised, and a data store matches it
-by equality without the plaintext or a decryption:</p>
-<pre><code class="language-text">[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
-</code></pre>
+by equality without the plaintext or a decryption. The bytes are <code>0x01</code>, the key id and the
+truncated HMAC, see <a href="./formats/values.html#beacons">Beacons</a>.</p>
 <ul>
-<li><code>0x01</code> is the version of the beacon layout;</li>
 <li><code>key_id()</code> returns the <code>KeyId</code> of the beacon key that calculated it, so that a column holds
 beacons of two keys during a re-index;</li>
-<li><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256, <code>BeaconBits::DEFAULT</code>,
-16, unless set. <code>BeaconBits::new</code> returns <code>None</code> outside that range;</li>
+<li><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, see <a href="./beacons.html#bits">Bits</a>.
+<code>BeaconBits::new</code> returns <code>None</code> outside the range;</li>
 <li><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>Beacon::try_from</code> reads them back,
 failing with <code>INVALID_BEACON_FORMAT</code> on bytes of another layout;</li>
 <li><code>==</code> and <code>Hash</code> compare the bytes, <code>==</code> in constant time, and <code>Debug</code> shows the key id only.</li>
@@ -401,7 +405,6 @@ let read_back = Beacon::&lt;Email&gt;::try_from(beacon.value().to_vec())?;
 assert_eq!(read_back, beacon);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The bits trade lookups against leakage, see <a href="./beacons.html#bits">Bits</a>.</p>
 <p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, as bytes, with serde and the <code>postgres</code> and <code>sqlx</code>
 features. A lookup matches the column by equality, so it gets an ordinary index:</p>
 <pre><code class="language-sql">CREATE TABLE users (
@@ -429,7 +432,8 @@ async fn candidates(
 }</code></pre>
 <p>See <a href="./beacons.html">Beacons</a> for calculating beacons with a KMS-encrypted beacon key, the context,
 normalisation and key rotation, and <a href="./keyring/beacons.html">Beacons</a> in kms-aead-keyring for
-beacons under key versions.</p>
+beacons under key versions. <a href="./use-cases/equality-lookups.html">Find a user by an encrypted email</a> puts
+them to use.</p>
 <h2 id="plaintext"><a class="header" href="#plaintext"><code>Plaintext</code></a></h2>
 <p><code>Plaintext</code> maps a type to the bytes it is encrypted as, and back. Every <code>T</code> of <code>Encrypted&lt;T, F&gt;</code>
 and <code>Beacon&lt;T&gt;</code> implements it. An application type implements it by mapping to one of the built-in
@@ -546,9 +550,9 @@ assert_eq!(decrypted, address);
 <p>A plaintext that is not the JSON of its type, such as a record written by an older version of the
 application, fails with <code>INVALID_PLAINTEXT</code> and logs a <code>WARN</code> event with an outline of the JSON.
 By default the outline shows the shape: the type of every value, the nesting, and where serde_json
-stopped reading, with no value and no length, since <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">a length gives away a hidden
-boolean</a>.
-Finding the field that changed takes more, and a type opts into it with a policy, the second type
+stopped reading. It shows no value and no length, since <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">a length gives away a hidden
+boolean</a>.</p>
+<p>Finding the field that changed takes more. A type opts into it with a policy, the second type
 parameter of <code>JsonEncoded</code>: a type of the application’s own that implements
 <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html"><code>JsonRedaction</code></a> and
 sets the constants it needs. <a href="#redaction-policies">Redaction policies</a> lists what each shows and
@@ -594,9 +598,9 @@ policy:</p>
 nothing else of it. A plaintext is encrypted because it is secret, so a policy reveals codes and
 identifiers only. A revealed value goes to the logs whenever the JSON does not decode: never reveal
 personal data. <code>kms_aead::json=off</code> in an <code>EnvFilter</code> turns the event off. The event’s fields are
-in <a href="./observability/spans-and-events.html#json-that-does-not-decode">Observability</a>. <code>RedactedJson</code> outlines any JSON
-the same way, with no encryption, see
-<a href="./use-cases/log-json-payloads.html">Log JSON payloads without leaking data</a>.</p>
+in <a href="./observability/spans-and-events.html#json-that-does-not-decode">Spans and events</a>. <code>RedactedJson</code>
+outlines any JSON the same way, with no encryption, see
+<a href="./use-cases/log-json-payloads.html">Log a webhook payload that failed to parse</a>.</p>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/encrypted_json.rs">here</a>.</p>
 <h3 id="redaction-policies"><a class="header" href="#redaction-policies">Redaction policies</a></h3>

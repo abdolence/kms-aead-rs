@@ -36,7 +36,7 @@
             const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-add654e4.js"></script>
@@ -255,7 +255,8 @@ ON u.id = p.id AND u.email = p.old_email
 WHEN MATCHED THEN UPDATE SET email = p.email, encryption_marker = @encryption_marker;
 </code></pre>
 <p>The rows stream from the application’s BigQuery client, one query of
-<code>SELECT id, email, encryption_marker FROM users WHERE encryption_marker &lt; @current</code>, and <code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
+<code>SELECT id, email, encryption_marker FROM users WHERE encryption_marker &lt; @current</code>, and
+<code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
 encryptor, and the client runs the <code>MERGE</code> with <code>@encryption_marker</code> bound to the marker of the
 encryptor’s record. Every row of a batch goes into <code>@rows</code>, the current ones with their bytes as
 they are, so that each gets the marker:</p>

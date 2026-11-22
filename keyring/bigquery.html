@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -181,6 +181,10 @@
                         <h1 id="bigquery-and-tink-interop"><a class="header" href="#bigquery-and-tink-interop">BigQuery and Tink interop</a></h1>
 <p>Keyring values are in Tink’s wire format, so Tink and BigQuery’s AEAD functions read the values the
 keyring writes, and the keyring reads theirs, given the same keys under the same key ids.</p>
+<p>This page is the keyring reference for <code>Interop::BigQuery</code>, <code>Interop::Tink</code> and the keyset exports:
+the wire format, the interop checks and the contract of the export calls. For an end-to-end
+walkthrough with the queries and a Tink reader, read
+<a href="../use-cases/bigquery-and-tink.html">Decrypt columns in BigQuery SQL or with Tink</a>.</p>
 <h2 id="wire-format"><a class="header" href="#wire-format">Wire format</a></h2>
 <p>Every value starts with Tink’s 5-byte TINK prefix, a version byte <code>0x01</code> and the key id, followed
 by what the version’s algorithm writes, see
@@ -393,8 +397,7 @@ version the keyset could not hold, see <a href="#fields-bigquery-reads">Fields B
 decrypt on it. The export is a <code>KeyringAdmin</code> call, see
 <a href="../production/permissions.html#kms-rights">KMS rights</a>.</li>
 </ul>
-<h3 id="how-it-behaves"><a class="header" href="#how-it-behaves">How it behaves</a></h3>
-<p>The crate’s live test runs the export and the queries against Cloud KMS and BigQuery:</p>
+<h3 id="runtime-behaviour-and-limits"><a class="header" href="#runtime-behaviour-and-limits">Runtime behaviour and limits</a></h3>
 <ul>
 <li>a value whose key id is not in the keyset fails to decrypt, and reads as <code>NULL</code> under
 <code>SAFE.AEAD.DECRYPT_STRING</code>;</li>

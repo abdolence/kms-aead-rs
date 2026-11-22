@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -188,8 +188,8 @@ copy unreadable at once.</p>
 DEKs are encrypted by the KEK, so shredding is the destruction of the KEK’s versions that encrypted
 them, backups included. Per KMS:</p>
 <ul>
-<li><strong>Google Cloud KMS</strong>: destroy the key versions. Cloud KMS schedules the destruction, 30 days
-later by default, and until then a version can be restored, see
+<li><strong>Google Cloud KMS</strong>: destroy the key versions. Cloud KMS schedules the destruction, and until
+then a version can be restored, see
 <a href="../providers/gcp.html#key-versions-and-rotation">Google Cloud KMS</a>;</li>
 <li><strong>AWS KMS</strong>: delete the key. Rotated key material is never destroyed on its own, see
 <a href="../providers/aws.html#key-versions-and-rotation">AWS KMS</a>;</li>
@@ -207,12 +207,12 @@ the key, once its configuration sets <code>deletion_allowed</code>, deletes ever
 destroying the KEK’s versions makes the backups of the record and the exported keysets
 unrecoverable too.</p>
 <p>Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
-Vault needs a key per scope. With a keyring, a shared KEK has a second route, <code>dangerously_shred()</code>:
-it destroys every version of the keyring and deletes its record from the store, with the earlier
+Vault needs a key per scope. With a keyring, a shared KEK has a second route, <code>dangerously_shred()</code>.
+It destroys every version of the keyring and deletes its record from the store, with the earlier
 versions the store keeps. The keys stay in every copy the store keeps beyond its API, such as a
 backup, and in every keyset exported from the keyring, see
 <a href="#what-survives-a-shred">What survives a shred</a>. A deployment that needs shredding guarantees uses
-a KEK per scope, see <a href="./keyring-per-tenant.html">A keyring per tenant</a>.</p>
+a KEK per scope, see <a href="./keyring-per-tenant.html">Give each customer of a SaaS its own keys</a>.</p>
 <h2 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h2>
 <p>Under a shared KEK, <code>KeyringAdmin::dangerously_shred()</code> ends the tenant’s keyring in one call: it
 destroys every version of the keyring in one write, as <code>dangerously_destroy_all_versions</code> does,

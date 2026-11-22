@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0787135a.js";
+            window.path_to_searchindex_js = "../searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -360,17 +360,14 @@ needs it first;</li>
 requests: a decryptor, like an encryptor, keeps decrypting after a shred, a destroy or a
 compromised flag of its version until it is dropped, see
 <a href="../streaming.html#limits">Streaming encryption</a>;</li>
-<li><code>DecryptingReader</code>, <code>DecryptingStream</code> and <code>decrypt_stream</code> yield the plaintext of a chunk as soon
-as the chunk is authentic, so write the response to a place you can discard. A failure of the source or the sink
-is <code>STREAM_IO</code>, and the retry is the whole stream again. They take the end of their source as
-the end of the object;</li>
+<li>a response written chunk by chunk goes to a place you can discard, since a chunk is yielded as soon
+as it is authentic, see <a href="../streaming.html#limits">Streaming encryption</a>;</li>
 <li>the object carries no signature. A party without the DEK that must check it gets a <code>Signature&lt;T&gt;</code>
 over a document that lists the object’s SHA-256 digest, see
-<a href="./publish-verifiable.html">Publish content anyone can verify</a>;</li>
-<li>a sweep re-encrypts a streamed object whole: decrypt it under the version it names and encrypt it
-again under the active one, with no helper.</li>
+<a href="./publish-verifiable.html">Publish a rate sheet or a release anyone can verify</a>.</li>
 </ul>
-<p>The limits are in <a href="../streaming.html#limits">Streaming encryption</a>.</p>
+<p>The other limits, such as <code>STREAM_IO</code> and the sweep of a streamed object, are in
+<a href="../streaming.html#limits">Streaming encryption</a>.</p>
 <p>Full examples available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/stream.rs">here</a> for
 a keyring, <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/stream_range_read.rs">here</a>

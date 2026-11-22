@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0787135a.js";
+            window.path_to_searchindex_js = "searchindex-52083058.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -179,6 +179,10 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="cargo-features"><a class="header" href="#cargo-features">Cargo features</a></h1>
+<p>Both crates enable no default features. This page lists every feature of kms-aead and
+kms-aead-keyring. Pick one crypto backend, the KMS providers you use and, for kms-aead-keyring, your
+keyring store and optional modes; the choice of a provider and a backend is in
+<a href="./getting-started/choosing.html">Choose a provider and a backend</a>.</p>
 <h2 id="kms-aead"><a class="header" href="#kms-aead">kms-aead</a></h2>
 <p>The crate has no default features.</p>
 <div class="table-wrapper">
@@ -190,7 +194,7 @@
 <tr><td><code>gcp-kms-encryption</code></td><td>Google Cloud KMS, with the native TLS roots of the system, and the <code>crc32c</code> crate for the checksums of its requests, see the notes below</td></tr>
 <tr><td><code>gcp-kms-encryption-webpki</code></td><td>Google Cloud KMS with the bundled WebPKI roots, and the <code>crc32c</code> crate</td></tr>
 <tr><td><code>gcp-kms-encryption-base</code></td><td>Google Cloud KMS without a TLS root store or crypto provider, and the <code>crc32c</code> crate, see the notes below</td></tr>
-<tr><td><code>aws-kms-encryption</code></td><td>AWS KMS, with the credentials of an <code>aws login</code> session. The <code>aws</code> features read <code>aws login</code> sessions, see <a href="./migrating-from-0.30.html#the-aws-features-read-aws-login-sessions">Migrating from 0.30</a></td></tr>
+<tr><td><code>aws-kms-encryption</code></td><td>AWS KMS, with the credentials of an <code>aws login</code> session among others, see <a href="./providers/aws.html#configuration-authentication-and-permissions">AWS KMS</a></td></tr>
 <tr><td><code>azure-kms-encryption</code></td><td>Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto provider</td></tr>
 <tr><td><code>azure-kms-encryption-tls-aws-lc-rs</code></td><td>the same as <code>azure-kms-encryption</code></td></tr>
 <tr><td><code>azure-kms-encryption-tls-no-provider</code></td><td>Azure with rustls and the crypto provider the application installs, see the notes below</td></tr>
@@ -207,7 +211,7 @@
 <tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds <code>p256</code> and <code>ed25519-dalek</code> for signatures, and <code>rsa</code> for RSA-OAEP, see <a href="./asymmetric-kek.html#what-each-backend-does">Asymmetric KEKs</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="./deterministic.html">Deterministic encryption</a></td></tr>
 <tr><td><code>stream</code></td><td>streaming encryption of values of any length, see the notes below. Turns on tokio’s <code>io-util</code> and brings in <code>bytes</code> and <code>futures-core</code></td></tr>
-<tr><td><code>legacy-formats</code></td><td>reads the layouts written by 0.29 and earlier. Deprecated, see <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a></td></tr>
+<tr><td><code>legacy-formats</code></td><td>reads the legacy envelope and DEK layouts. Deprecated, see <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a></td></tr>
 <tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
 <tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
 <tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK), see the notes below and <a href="./observability/metrics.html#metrics">Metrics</a></td></tr>
@@ -233,19 +237,22 @@ each call, KMS request and keyring store read takes.</li>
 </ul>
 <p>The local KMS provider, <code>LocalKmsProvider</code>, is in every build and needs no feature.</p>
 <p>Every build adds <code>serde</code>, <code>serde_bytes</code>, <code>serde_json</code>, secret-vault-value’s <code>serde</code> feature, <code>sha2</code>,
-<code>base64ct</code> and the RustCrypto crates <code>der</code>, <code>spki</code>, <code>pkcs8</code>, <code>sec1</code> and <code>pem-rfc7468</code>. <code>sha2</code>
-computes the thumbprint of a public key and, in kms-aead-keyring, the canonical digest of a
-record, where no backend is named. The RustCrypto crates parse and write the framing of keys and
-signatures: PEM, the text armour around base64 bytes; SubjectPublicKeyInfo, the DER structure of a
-public key, DER being a binary encoding; PKCS#8, the DER structure of a private key; and the DER
-encoding of an ECDSA signature. <code>serde_json</code> reads and writes JSON Web Keys (JWK), the JSON form of a key, so
+<code>base64ct</code> and the RustCrypto crates <code>der</code>, <code>spki</code>, <code>pkcs8</code>, <code>sec1</code> and <code>pem-rfc7468</code>:</p>
+<ul>
+<li><code>sha2</code> computes the thumbprint of a public key and, in kms-aead-keyring, the canonical digest of
+a record, where no backend is named;</li>
+<li>the RustCrypto crates parse and write the framing of keys and signatures: PEM, the text armour
+around base64 bytes; SubjectPublicKeyInfo, the DER structure of a public key, DER being a binary
+encoding; PKCS#8, the DER structure of a private key; and the DER encoding of an ECDSA signature;</li>
+<li><code>serde_json</code> reads and writes JSON Web Keys (JWK), the JSON form of a key, so
 <code>PublicKeyFormat::Jwk</code>, <code>encode(Jwk)</code> and the JWK Set functions of <code>VerifyingKeySet</code> are in every
-build, as are <code>JsonEncoded&lt;T&gt;</code> and the serde implementations of the library’s types.</p>
+build, as are <code>JsonEncoded&lt;T&gt;</code> and the serde implementations of the library’s types.</li>
+</ul>
 <h3 id="feature-rules"><a class="header" href="#feature-rules">Feature rules</a></h3>
 <p>The crate refuses some feature combinations at compile time with <code>compile_error!</code>:</p>
 <ul>
-<li>a provider feature without a backend feature fails with “kms-aead needs a crypto backend for
-its KMS providers: enable “ring”, “aws-lc”, “aws-lc-fips” or “rustcrypto”“;</li>
+<li>a provider feature without a backend feature fails: enable <code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code> or
+<code>rustcrypto</code> beside it;</li>
 <li>HashiCorp Vault Transit needs exactly one of <code>-tls-roots</code> and <code>-tls-webpki</code>, and exactly one
 of <code>-tls-aws-lc-rs</code> and <code>-tls-ring</code>. <code>hashicorp-vault-transit-kms-encryption</code> already enables
 <code>-tls-roots</code> and <code>-tls-aws-lc-rs</code>, so combine the other variants with
