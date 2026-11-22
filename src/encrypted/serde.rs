@@ -34,8 +34,8 @@ mod tests {
     }
 
     #[test]
-    fn a_value_round_trips_through_serde_json_as_a_byte_array(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_value_round_trips_through_serde_json_as_a_byte_array()
+    -> Result<(), Box<dyn std::error::Error>> {
         let value = Encrypted::<String, Randomized>::try_from(randomized_bytes())?;
 
         let json = serde_json::to_string(&value)?;

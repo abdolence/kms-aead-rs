@@ -6,7 +6,7 @@ use rsb_derive::Builder;
 use serde::{Deserialize, Serialize};
 
 use super::hc_vault_transit_kms_encryption::{
-    parse_vault_response, KeyData, TransitResponse, VaultTransport,
+    KeyData, TransitResponse, VaultTransport, parse_vault_response,
 };
 use super::{HcVaultTransitKeyRef, HcVaultTransitProviderOptions};
 use crate::errors::{KmsAeadError, KmsAeadSignatureError, KmsAeadSystemError};
@@ -28,6 +28,7 @@ const MARSHALING_ALGORITHM: &str = "jws";
 
 /// One version of a Transit key of HashiCorp Vault that signs.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct HcVaultTransitSigningKeyRef {
     /// The name of the Transit key.
     pub key_name: String,
@@ -263,10 +264,10 @@ mod tests {
     use super::*;
     use crate::formats::PublicKeyFormat;
     use crate::signing::{Signer, Verifier, VerifyingKeySet};
-    use crate::test_http::{answer_with, ReceivedRequest};
+    use crate::test_http::{ReceivedRequest, answer_with};
     use crate::test_provider::{
-        assert_code, verifying_key_of, Invoice, TestBackend, ED25519_PKCS8_DER, INVOICE_PAYLOAD,
-        P256_PKCS8_DER, P256_SIGNATURE,
+        ED25519_PKCS8_DER, INVOICE_PAYLOAD, Invoice, P256_PKCS8_DER, P256_SIGNATURE, TestBackend,
+        assert_code, verifying_key_of,
     };
     use tokio::net::TcpListener;
 

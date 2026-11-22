@@ -7,8 +7,8 @@
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::AeadAlgorithm;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{

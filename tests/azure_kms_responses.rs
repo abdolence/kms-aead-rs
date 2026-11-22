@@ -360,8 +360,8 @@ mod asymmetric_kek {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_dek_is_unwrapped_by_its_version_with_rsa_oaep_256(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn an_asymmetric_dek_is_unwrapped_by_its_version_with_rsa_oaep_256()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (encrypted_dek, block) = asymmetric_encrypted_dek().await?;
         for algorithm in [
             AzureKmsAlgorithm::RsaOaepSha256,
@@ -413,8 +413,8 @@ mod asymmetric_kek {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_dek_of_a_local_kek_or_without_a_version_is_refused_before_any_request(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_dek_of_a_local_kek_or_without_a_version_is_refused_before_any_request()
+    -> KmsAeadResult<()> {
         for (kek_id, kek_version) in [
             (&b"local"[..], KEY_VERSION.as_bytes()),
             (&b""[..], &b""[..]),
@@ -477,8 +477,8 @@ mod asymmetric_kek {
     }
 
     #[tokio::test]
-    async fn the_latest_public_key_of_an_rsa_or_rsa_hsm_key_has_the_version_of_its_kid(
-    ) -> KmsAeadResult<()> {
+    async fn the_latest_public_key_of_an_rsa_or_rsa_hsm_key_has_the_version_of_its_kid()
+    -> KmsAeadResult<()> {
         let expected = kek_public_key()?;
         for kty in ["RSA", "RSA-HSM"] {
             let http_client = http_client_of(key_response(

@@ -6,18 +6,19 @@ use std::error::Error;
 use std::future::Future;
 use std::io;
 use std::ops::Bound;
-use std::pin::{pin, Pin};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::pin::{Pin, pin};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
 use futures::executor::block_on;
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
+use crate::AeadAlgorithm;
 #[cfg(feature = "aws-lc-rs")]
 use crate::backends::AwsLc;
 #[cfg(feature = "ring")]
@@ -25,8 +26,7 @@ use crate::backends::Ring;
 #[cfg(feature = "rustcrypto")]
 use crate::backends::RustCrypto;
 use crate::errors::KmsAeadError;
-use crate::test_provider::{error_code_of, renderings, TestBackend};
-use crate::AeadAlgorithm;
+use crate::test_provider::{TestBackend, error_code_of, renderings};
 
 use super::layout::{CHUNK_TAG_LEN, FULL_CHUNK_PLAINTEXT_LEN, FULL_CHUNK_STORED_LEN};
 use super::*;
@@ -274,9 +274,11 @@ fn the_plans_of_edge_ranges_follow_the_seeking_rules() -> TestResult {
         let offset = header_len + chunk * FULL_CHUNK_STORED_LEN;
         assert_eq!(plan.ciphertext(), offset..offset);
         assert_eq!(plan.plaintext_start(), chunk * FULL_CHUNK_PLAINTEXT_LEN);
-        assert!(decryptor
-            .decrypt_chunk_read::<Vec<u8>>(&plan, &[])?
-            .is_empty());
+        assert!(
+            decryptor
+                .decrypt_chunk_read::<Vec<u8>>(&plan, &[])?
+                .is_empty()
+        );
     }
     for range in [len..len, 0..len, len - 1..len] {
         let plan = StreamFormat::Prefixed.plan_chunk_read(stored_len, range.clone())?;
@@ -1350,7 +1352,7 @@ fn one_decryptor_serves_ranges_and_a_reader_at_once() -> TestResult {
 fn counted(
     items: Vec<Bytes>,
     taken: &Arc<AtomicUsize>,
-) -> impl Stream<Item = Result<Bytes, io::Error>> + Unpin {
+) -> impl Stream<Item = Result<Bytes, io::Error>> + Unpin + use<> {
     let taken = taken.clone();
     stream::iter(items).map(move |item| {
         taken.fetch_add(1, Ordering::SeqCst);
@@ -1405,9 +1407,11 @@ fn the_streams_round_trip_in_items_of_any_size() {
                     stored_len_of(StreamFormat::Prefixed, len)
                 );
                 prop_assert_eq!(items[0].len(), PREFIXED_HEADER_LEN);
-                prop_assert!(items[1..items.len() - 1]
-                    .iter()
-                    .all(|item| item.len() == STORED_STREAM_CHUNK_LEN));
+                prop_assert!(
+                    items[1..items.len() - 1]
+                        .iter()
+                        .all(|item| item.len() == STORED_STREAM_CHUNK_LEN)
+                );
 
                 let decryptor = Arc::new(decryptor::<B>(StreamFormat::Prefixed, &dek, &stored)?);
                 let decrypting = DecryptingStream::new(

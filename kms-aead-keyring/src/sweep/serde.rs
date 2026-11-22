@@ -56,8 +56,8 @@ mod tests {
     /// project `PROJECT_ID`. Each run writes to a collection of its own and deletes its documents.
     #[cfg(feature = "firestore")]
     mod on_firestore {
-        use firestore::gcloud_sdk::google::firestore::v1::value::ValueType;
         use firestore::FirestoreDb;
+        use firestore::gcloud_sdk::google::firestore::v1::value::ValueType;
         use serde::Serialize;
 
         use super::*;

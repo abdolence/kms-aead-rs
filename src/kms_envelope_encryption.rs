@@ -18,20 +18,20 @@ use tracing::Span;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use crate::errors::{KmsAeadError, KmsAeadLegacyFormatError, KmsAeadSystemError};
+use crate::errors::{KmsAeadError, KmsAeadSystemError};
 #[cfg(feature = "stream")]
 use crate::formats::envelope::ENCRYPTED_DEK_LEN_FIELD_SIZE;
 use crate::formats::{Bare, Envelope};
 use crate::metrics::{self, Measurement};
 #[cfg(feature = "stream")]
 use crate::stream::{
-    __HeaderGatherer, __read_header, CobblestoneHeader, DecryptingReader, DecryptingStream,
-    EnvelopeStreamHeader, KeyReference, StreamDecryptor, StreamEncryptor, StreamFormat,
+    CobblestoneHeader, DecryptingReader, DecryptingStream, EnvelopeStreamHeader, KeyReference,
+    StreamDecryptor, StreamEncryptor, StreamFormat, StreamHeaderGatherer, read_stream_header,
 };
 use crate::{
-    spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
-    DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadDecryptionProvider,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, DataEncryptionKey,
+    Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadDecryptionProvider,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, spans,
 };
 
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
@@ -62,7 +62,7 @@ const MAX_BYTES_PER_AES_GCM_DEK: u64 = 1 << 52;
 ///
 /// Over any [`KmsAeadEncryptionProvider`] the envelope encrypts. The calls that decrypt a DEK or
 /// decrypt a value, `decrypt`, `decrypt_with_dek`, the `*_with_encrypted_dek` calls, `beacon`,
-/// `decrypt_deterministic_dek`, the re-encryptions, the legacy upgrades and the stream decryptors,
+/// `decrypt_deterministic_dek`, the re-encryptions and the stream decryptors,
 /// need a [`KmsAeadDecryptionProvider`], so an envelope over a provider that only encrypts, such
 /// as [`PublicKeyKekProvider`](crate::providers::PublicKeyKekProvider), has none of them.
 ///
@@ -280,10 +280,10 @@ impl DekReuse {
         if let Some(current) = self.claim(len) {
             return Ok(ClaimedDek::Claimed(current));
         }
-        if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival {
-            if let Some(error) = &*last_failure {
-                return Err(error.clone());
-            }
+        if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival
+            && let Some(error) = &*last_failure
+        {
+            return Err(error.clone());
         }
         let renewed = renew().await;
         self.ended_renewals.fetch_add(1, Ordering::Relaxed);
@@ -643,7 +643,7 @@ where
     }
 
     /// The `mode` span field of `encrypt` and `decrypt`.
-    pub(crate) fn mode(&self) -> &'static str {
+    fn mode(&self) -> &'static str {
         if self.dek_reuse.is_some() {
             "store_less"
         } else {
@@ -652,8 +652,8 @@ where
     }
 
     /// The metric attributes of a call of `operation` in `mode` under the envelope's algorithm.
-    fn call(&self, operation: &'static str, mode: &'static str) -> metrics::Call {
-        metrics::Call {
+    fn call(&self, operation: &'static str, mode: &'static str) -> metrics::OperationAttributes {
+        metrics::OperationAttributes {
             operation,
             mode,
             backend: B::NAME,
@@ -674,18 +674,13 @@ where
     B: AeadBackend,
 {
     /// Decrypts the DEK stored in `value`, through the envelope's [`DekCache`], then decrypts the
-    /// value with it and decodes the plaintext as a `T`. With the deprecated `legacy-formats`
-    /// feature, `value` may hold a layout written by 0.29 or earlier, and the first read of each
-    /// layout in the process logs one `WARN` event.
+    /// value with it and decodes the plaintext as a `T`.
     ///
     /// # Errors
     ///
     /// Besides the AEAD and KMS errors, the errors of [`DekCache::with_dek`] when the encrypted
     /// DEK does not decrypt to a key, and `INVALID_PLAINTEXT` when the plaintext is not an encoding
-    /// of `T`. A legacy value passes `TryFrom` on its lengths alone, so with `legacy-formats`
-    /// reading one fails here with `INVALID_KEY_VERSION` when its key version is not ASCII
-    /// alphanumeric, and with `INVALID_CIPHER_TEXT_FORMAT` when its cipher text is shorter than a
-    /// nonce and a tag.
+    /// of `T`.
     pub async fn decrypt<T: Plaintext>(
         &self,
         aad: &(impl AsRef<[u8]> + ?Sized),
@@ -791,7 +786,7 @@ where
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Beacon<T>> {
         let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256)?;
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: "beacon",
             mode: "caller_dek",
             backend: B::NAME,
@@ -828,22 +823,16 @@ where
     ///
     /// # Errors
     ///
-    /// The errors of [`Encrypted::separate`] and of the provider, `INVALID_KEY_FORMAT` when the
-    /// decrypted key is not a key kms-aead encrypts, and `LEGACY_FORMAT` for a value in a layout of
-    /// 0.29 or earlier, with or without `legacy-formats`. `upgrade_legacy_value` rewrites such a
-    /// value in Tink's format, with its DEK encrypted under the current version.
+    /// The errors of the provider, `INVALID_KEY_FORMAT` when the decrypted key is not a key
+    /// kms-aead encrypts, and `LEGACY_FORMAT` for a value whose encrypted DEK is in a layout of
+    /// 0.29 or earlier.
     pub async fn reencrypt_dek<T>(
         &self,
         value: &Encrypted<T, Envelope>,
     ) -> KmsAeadResult<Encrypted<T, Envelope>> {
         let measurement = Measurement::start(self.reencrypt_call(self.mode()));
         let reencrypted = spans::in_span(spans::reencrypt_dek(&self.dek_cache), async {
-            let (bare, encrypted_dek) = value.separate().map_err(|error| match error {
-                KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError { format, .. }) => {
-                    KmsAeadLegacyFormatError::refused_by_reencryption(format)
-                }
-                error => error,
-            })?;
+            let (bare, encrypted_dek) = value.separate()?;
             let encrypted_dek =
                 crate::formats::reencrypt_encrypted_dek(&encrypted_dek, &self.provider).await?;
             Encrypted::join(&bare, &encrypted_dek)
@@ -866,8 +855,7 @@ where
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a key kms-aead
-    /// encrypts, and `LEGACY_FORMAT` for a key in a layout of 0.29 or earlier, with or without
-    /// `legacy-formats`. `upgrade_legacy_encrypted_dek` rewrites such a key.
+    /// encrypts, and `LEGACY_FORMAT` for a key in a layout of 0.29 or earlier.
     pub async fn reencrypt_encrypted_dek(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
@@ -1022,7 +1010,7 @@ where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let mut stored = __HeaderGatherer::new(stored);
+        let mut stored = StreamHeaderGatherer::new(stored);
         let header_len =
             EnvelopeStreamHeader::header_len(stored.read(ENCRYPTED_DEK_LEN_FIELD_SIZE).await?)?;
         let header = EnvelopeStreamHeader::try_from(stored.read(header_len).await?)?;
@@ -1075,9 +1063,9 @@ where
         R: AsyncRead + Unpin,
     {
         let mut header = Vec::new();
-        __read_header(&mut stored, &mut header, ENCRYPTED_DEK_LEN_FIELD_SIZE).await?;
+        read_stream_header(&mut stored, &mut header, ENCRYPTED_DEK_LEN_FIELD_SIZE).await?;
         let header_len = EnvelopeStreamHeader::header_len(&header)?;
-        __read_header(&mut stored, &mut header, header_len).await?;
+        read_stream_header(&mut stored, &mut header, header_len).await?;
         let header = EnvelopeStreamHeader::try_from(&header[..])?;
         let decryptor = self.stream_decryptor(aad, &header).await?;
         Ok(DecryptingReader::new(Arc::new(decryptor), stored))
@@ -1110,23 +1098,9 @@ where
 
     /// Decrypts `value` as `decrypt` does, in the span of the caller.
     async fn decrypt_bytes(&self, aad: &[u8], value: &[u8]) -> KmsAeadResult<SecretValue> {
-        #[cfg(feature = "legacy-formats")]
-        let (bare, encrypted_dek) = {
-            let stored = crate::formats::legacy::StoredEnvelope::split(value)?;
-            (
-                stored.bare,
-                stored.encrypted_dek(self.provider.kek().provider())?,
-            )
-        };
-        #[cfg(not(feature = "legacy-formats"))]
-        let (bare, encrypted_dek) = {
-            let (encrypted_dek_bytes, bare) =
-                crate::formats::envelope::split_encrypted_dek_and_bare_value(value)?;
-            (
-                bare,
-                EncryptedDataEncryptionKey::new(encrypted_dek_bytes.to_vec()),
-            )
-        };
+        let (encrypted_dek_bytes, bare) =
+            crate::formats::envelope::split_encrypted_dek_and_bare_value(value)?;
+        let encrypted_dek = EncryptedDataEncryptionKey::new(encrypted_dek_bytes.to_vec());
         self.with_dek(&encrypted_dek, |dek| {
             self.cipher
                 .open(aad, bare, 0, dek.value().ref_sensitive_value())
@@ -1162,8 +1136,8 @@ where
     }
 
     /// The metric attributes of a re-encryption in `mode`, in which the algorithm plays no part.
-    pub(crate) fn reencrypt_call(&self, mode: &'static str) -> metrics::Call {
-        metrics::Call {
+    fn reencrypt_call(&self, mode: &'static str) -> metrics::OperationAttributes {
+        metrics::OperationAttributes {
             operation: "reencrypt_dek",
             mode,
             backend: B::NAME,
@@ -1180,12 +1154,11 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::*;
-    use crate::errors::KmsAeadLegacyFormat;
     use crate::formats::{SymmetricKeyFormat, TinkKeyType};
     use crate::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
     use crate::test_provider::{
-        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
-        TestKmsProvider, CONCURRENT_CALLS,
+        CONCURRENT_CALLS, CountingKmsProvider, TestBackend, TestKmsProvider,
+        encrypted_by_test_provider, let_spawned_tasks_wait,
     };
     use crate::{KekRef, KmsProvider};
 
@@ -1390,19 +1363,16 @@ mod tests {
         Ok(())
     }
 
-    // The same secret under the AAD `fixture-aad`, with the test provider's raw key as the
-    // encrypted DEK, in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0,
-    // encrypted with ChaCha20-Poly1305, the default of those releases.
+    // A secret under the AAD `fixture-aad`, with the test provider's raw key as the encrypted DEK,
+    // in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0, encrypted with
+    // ChaCha20-Poly1305, the default of those releases.
     const FIXTURE_AAD: &[u8] = b"fixture-aad";
-    #[cfg(feature = "legacy-formats")]
-    const FIXTURE_SECRET: &str = "fixture-secret";
     const ENVELOPE_FROM_0_28_1: &str = "000000000000002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e";
     const ENVELOPE_FROM_0_29: &str = "0100002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e";
     const ENVELOPE_FROM_0_23_0_ON_32_BIT: &str = "00000020e8efcd9417d41f8dee5dc6b8cfde7b209951fb80e60e0b8240a9fa688f815e1501a12b36821b4aa097fbe86573df02d8fe8d34235bdb9b3731107e946d0021d7d2ea089f87d4bea034a2";
 
-    #[cfg(feature = "legacy-formats")]
     #[tokio::test]
-    async fn envelopes_from_0_29_and_earlier_decrypt() -> KmsAeadResult<()> {
+    async fn envelopes_from_0_29_and_earlier_are_refused() -> KmsAeadResult<()> {
         let encryption = Envelope::with_options(
             TestKmsProvider::Working,
             KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
@@ -1411,33 +1381,6 @@ mod tests {
             ENVELOPE_FROM_0_28_1,
             ENVELOPE_FROM_0_29,
             ENVELOPE_FROM_0_23_0_ON_32_BIT,
-        ] {
-            let envelope = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
-                hex::decode(envelope_hex).unwrap(),
-            )?;
-            let secret = encryption.decrypt(FIXTURE_AAD, &envelope).await?;
-            assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
-        }
-        Ok(())
-    }
-
-    #[cfg(not(feature = "legacy-formats"))]
-    #[tokio::test]
-    async fn envelopes_from_0_29_and_earlier_need_legacy_formats() -> KmsAeadResult<()> {
-        let encryption = Envelope::with_options(
-            TestKmsProvider::Working,
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-        )?;
-        for (envelope_hex, format) in [
-            (
-                ENVELOPE_FROM_0_28_1,
-                KmsAeadLegacyFormat::LengthPrefixedEnvelope,
-            ),
-            (ENVELOPE_FROM_0_29, KmsAeadLegacyFormat::EnvelopeV1),
-            (
-                ENVELOPE_FROM_0_23_0_ON_32_BIT,
-                KmsAeadLegacyFormat::RawEncryptedDek,
-            ),
         ] {
             let read = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
                 hex::decode(envelope_hex).unwrap(),
@@ -1447,92 +1390,17 @@ mod tests {
                 Err(error) => Err(error),
             };
             assert!(
-                matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
-                "{format:?}: {result:?}"
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "LEGACY_FORMAT"),
+                "{envelope_hex}: {result:?}"
             );
         }
         Ok(())
     }
 
-    #[cfg(feature = "legacy-formats")]
     #[tokio::test]
-    #[expect(deprecated, reason = "tests the deprecated upgrade")]
-    async fn envelopes_from_0_29_and_earlier_upgrade_to_tink() -> KmsAeadResult<()> {
-        let encryption = CountingEnvelope::with_options(
-            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-        )?;
-        for envelope_hex in [
-            ENVELOPE_FROM_0_28_1,
-            ENVELOPE_FROM_0_29,
-            ENVELOPE_FROM_0_23_0_ON_32_BIT,
-        ] {
-            let legacy = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
-                hex::decode(envelope_hex).unwrap(),
-            )?;
-
-            let upgraded = encryption
-                .upgrade_legacy_value(FIXTURE_AAD, &legacy)
-                .await?
-                .expect("a legacy value is upgraded");
-
-            let (bare, encrypted_dek) = upgraded.separate()?;
-            let encrypted_len = 12 + FIXTURE_SECRET.len() + 16;
-            assert!(encrypted_dek.to_hex_string().starts_with("1220"));
-            assert_eq!(
-                bare.value(),
-                &legacy.value()[legacy.value().len() - encrypted_len..]
-            );
-            assert_eq!(
-                encryption.decrypt(FIXTURE_AAD, &upgraded).await?,
-                SecretValue::from(FIXTURE_SECRET)
-            );
-            assert!(encryption
-                .upgrade_legacy_value(FIXTURE_AAD, &upgraded)
-                .await?
-                .is_none());
-        }
-        assert_eq!(encryption.provider.encryptions(), 3);
-        Ok(())
-    }
-
-    #[cfg(feature = "legacy-formats")]
-    #[tokio::test]
-    #[expect(deprecated, reason = "tests the deprecated upgrade")]
-    async fn a_value_that_does_not_decrypt_is_not_upgraded() -> KmsAeadResult<()> {
-        let legacy = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
-            hex::decode(ENVELOPE_FROM_0_29).unwrap(),
-        )?;
-        let aes_256_gcm = CountingEnvelope::with_options(
-            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
-        )?;
-        let chacha20_poly1305 = CountingEnvelope::with_options(
-            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-        )?;
-
-        let under_another_algorithm = aes_256_gcm.upgrade_legacy_value(FIXTURE_AAD, &legacy).await;
-        let under_another_aad = chacha20_poly1305
-            .upgrade_legacy_value(b"another-aad", &legacy)
-            .await;
-
-        assert!(
-            matches!(&under_another_algorithm, Err(e) if e.code() == "DECRYPT"),
-            "{under_another_algorithm:?}"
-        );
-        assert!(
-            matches!(&under_another_aad, Err(e) if e.code() == "DECRYPT"),
-            "{under_another_aad:?}"
-        );
-        assert_eq!(aes_256_gcm.provider.encryptions(), 0);
-        assert_eq!(chacha20_poly1305.provider.encryptions(), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_reencrypted_dek_decrypts_the_same_bytes_without_the_old_kek_version(
-    ) -> KmsAeadResult<()> {
+    async fn a_reencrypted_dek_decrypts_the_same_bytes_without_the_old_kek_version()
+    -> KmsAeadResult<()> {
         let [v1, v2] =
             [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
         let kek_id = LocalKekId::try_from(ORDERS_KEK.to_string())?;
@@ -1602,16 +1470,13 @@ mod tests {
             .reencrypt_encrypted_dek(&encrypted_dek_v1)
             .await;
 
-        assert!(
-            matches!(&raw_key, Err(KmsAeadError::LegacyFormat(error))
-                if error.format == KmsAeadLegacyFormat::RawEncryptedDek),
-            "{raw_key:?}"
-        );
-        assert!(
-            matches!(&layout_v1, Err(KmsAeadError::LegacyFormat(error))
-                if error.format == KmsAeadLegacyFormat::EncryptedDekV1),
-            "{layout_v1:?}"
-        );
+        for result in [raw_key.map(|_| ()), layout_v1.map(|_| ())] {
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "LEGACY_FORMAT"),
+                "{result:?}"
+            );
+        }
         Ok(())
     }
 
@@ -2170,8 +2035,8 @@ mod tests {
         use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
         use super::*;
-        use crate::stream::tests::{pieces, PiecesSource, PIECE_LENS};
-        use crate::stream::{ChunkReadPlan, EnvelopeStreamHeader, BARE_HEADER_LEN};
+        use crate::stream::tests::{PIECE_LENS, PiecesSource, pieces};
+        use crate::stream::{BARE_HEADER_LEN, ChunkReadPlan, EnvelopeStreamHeader};
         use crate::test_provider::assert_code;
 
         /// Long enough for several chunks, and different from chunk to chunk.
@@ -2298,8 +2163,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_value_decrypts_from_its_first_byte_through_both_constructors(
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        async fn a_value_decrypts_from_its_first_byte_through_both_constructors()
+        -> Result<(), Box<dyn std::error::Error>> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let plaintext = plaintext();
             let stored = encrypted(&envelope, &plaintext).await?;
@@ -2322,8 +2187,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_value_followed_by_another_byte_fails_through_both_constructors(
-        ) -> KmsAeadResult<()> {
+        async fn a_value_followed_by_another_byte_fails_through_both_constructors()
+        -> KmsAeadResult<()> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let stored = encrypted(&envelope, b"a streamed value").await?;
             let followed = [&stored[..], &[0]].concat();
@@ -2369,8 +2234,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_hostile_encrypted_dek_length_reaches_no_kms_through_the_constructors(
-        ) -> KmsAeadResult<()> {
+        async fn a_hostile_encrypted_dek_length_reaches_no_kms_through_the_constructors()
+        -> KmsAeadResult<()> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let stored = encrypted(&envelope, b"a streamed value").await?;
 
@@ -2390,8 +2255,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_source_that_fails_before_the_header_is_whole_is_a_stream_io_error(
-        ) -> KmsAeadResult<()> {
+        async fn a_source_that_fails_before_the_header_is_whole_is_a_stream_io_error()
+        -> KmsAeadResult<()> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let stored = encrypted(&envelope, b"a streamed value").await?;
 
@@ -2536,7 +2401,7 @@ mod tests {
             let plaintext = plaintext();
             let stored = encrypted(&envelope, &plaintext).await?;
             let encrypted_dek = header_of(&stored)?.encrypted_dek().clone();
-            let (dek, _) = crate::formats::decrypt_dek(&encrypted_dek, &envelope.provider).await?;
+            let dek = crate::formats::decrypt_dek(&encrypted_dek, &envelope.provider).await?;
 
             let message = &stored[4 + encrypted_dek.value().len()..];
             let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
@@ -2551,8 +2416,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn an_envelope_of_another_algorithm_refuses_a_stream_before_the_kms(
-        ) -> KmsAeadResult<()> {
+        async fn an_envelope_of_another_algorithm_refuses_a_stream_before_the_kms()
+        -> KmsAeadResult<()> {
             let chacha =
                 KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305);
             let envelope = counting_envelope(chacha)?;

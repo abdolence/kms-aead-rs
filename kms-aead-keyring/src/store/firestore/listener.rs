@@ -21,9 +21,9 @@ use ::firestore::{
 use tokio::sync::mpsc;
 
 use super::FirestoreKeyringStore;
+use crate::KeyringId;
 use crate::errors::{KeyringError, KeyringResult};
 use crate::store::{KeyringStore, KeyringWatch, StoreOperation, WatchEvent};
-use crate::KeyringId;
 
 /// The watches of a store and its clones, and the firestore-rs listener that signals them.
 #[derive(Default)]
@@ -398,8 +398,8 @@ mod tests {
     }
 
     #[test]
-    fn a_target_removed_for_a_transient_cause_disconnects_and_reconnects_only_its_keyring(
-    ) -> TestResult {
+    fn a_target_removed_for_a_transient_cause_disconnects_and_reconnects_only_its_keyring()
+    -> TestResult {
         let mut routes = Routes::default();
         let (removed, mut tenant_a) = watched(&mut routes, "tenant-a")?;
         let (kept, mut tenant_b) = watched(&mut routes, "tenant-b")?;

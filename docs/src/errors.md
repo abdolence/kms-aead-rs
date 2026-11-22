@@ -17,9 +17,7 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
   call fails the same way again;
 - `UnsupportedAlgorithm`: the backend does not implement the algorithm, from constructors only;
 - `SignatureError`: a signature could not be made, read or verified, or a KMS refused a sign or
-  public-key request; never retried;
-- `LegacyFormat`: a stored value in a legacy layout, which only the
-  `legacy-formats` feature reads, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier).
+  public-key request; never retried.
 
 The enum is `#[non_exhaustive]`, so a `match` on it needs a `_` arm.
 
@@ -70,10 +68,9 @@ The library's codes, by area:
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
 | `INVALID_PLAINTEXT` | encryption | a decrypted value that is not an encoding of its type, or a `JsonEncoded` value that does not serialise |
 | `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
-| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the legacy encrypted DEK layout v1 that cannot be read, with `legacy-formats` |
-| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a legacy layout |
+| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
-| `LEGACY_FORMAT` | legacy format | a legacy layout without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the legacy envelope layouts in `separate` |
+| `LEGACY_FORMAT` | encryption | a layout of 0.29 or earlier, at `Encrypted::try_from` or at decryption, see [Values written by 0.29 and earlier](./migrating-from-0.29.md#values-written-by-029-and-earlier) |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
 
@@ -241,11 +238,11 @@ text may change in any release.
 | `InvalidIdentifier` | `INVALID_IDENTIFIER` | a keyring id, an AAD part or a store name that breaks the rule of its type |
 | `RecordMissing` | `RECORD_MISSING` | no record for the keyring: at `open` and `admin`, before an administrative write, and from `reload` once the process took the record as deleted, see [A record gone from the store](./keyring/record-cache.md#a-record-gone-from-the-store). A `dangerously_shred()` of a keyring already gone returns `Ok` |
 | `RecordExists` | `RECORD_EXISTS` | `create` found a record |
-| `RecordInvalid` | `RECORD_INVALID` | a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (`DuplicateEncryptedDek`) or a `signature` member that is not a detached signature (`MalformedSignature`), see [Keyring records](./formats/keyring-records.md#keyring-records) |
+| `RecordInvalid` | `RECORD_INVALID` | a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (`DuplicateEncryptedDek`) or a `signature` member that is not a detached signature (`MalformedSignature`); and before an administrative write, a record that holds members this release does not know (`UnknownMembers`), see [Keyring records](./formats/keyring-records.md#keyring-records) |
 | `RecordUnsigned` | `RECORD_UNSIGNED` | an unsigned record where record verification is `Required`, or where a signing admin writes over it, see [Signing the keyring record](./signing.md#signing-the-keyring-record) |
 | `RecordSignatureInvalid` | `RECORD_SIGNATURE_INVALID` | a record whose signature fails under the verifying keys, or that is signed where the registry has no key; the cause carries the signature error's code |
-| `RecordSignerMissing` | `RECORD_SIGNER_MISSING` | a write by an administration without a record signer over a signed record, before any store write |
-| `RecordSignatureRemoved` | `RECORD_SIGNATURE_REMOVED` | an unsigned record where the process holds a signed one, under `VerifyIfSigned` |
+| `RecordSignerMissing` | `RECORD_SIGNER_MISSING` | a write by an administration without a record signer over a signed record, before any store write; under `Required`, any write without one, before any KMS call or store write: `create`, `open_or_create` where it would create the record, after the one read that finds none, and every write of such an administration, `dangerously_unsign_record` included |
+| `RecordSignatureRemoved` | `RECORD_SIGNATURE_REMOVED` | an unsigned record where the process holds a signed one, under `VerifyIfSigned`, or held one before the record's deletion; a `create` that it refuses writes nothing |
 | `RecordRegressed` | `RECORD_REGRESSED` | a record that moves a version backwards from the one this process holds, from `reload` and before an administrative write |
 | `RecordConflict` | `RECORD_CONFLICT` | an administrative write lost every compare-and-swap, `attempts` of them |
 | `KekMismatch` | `KEK_MISMATCH` | the provider's KEK is not the one the record names |
@@ -265,7 +262,7 @@ text may change in any release.
 | `KeyPurposeMismatch` | `KEY_PURPOSE_MISMATCH` | a key id of another purpose than the call's |
 | `InvalidTransition` | `INVALID_TRANSITION` | a lifecycle call that does not apply to the version's state, see [States](./keyring/lifecycle.md#states) |
 | `PromotionTooEarly` | `PROMOTION_TOO_EARLY` | a promotion before `record_ttl` has passed since the version was staged |
-| `ReservedKeyId` | `RESERVED_KEY_ID` | a key id no version has: ordinal zero |
+| `ReservedKeyId` | `RESERVED_KEY_ID` | a key id no version has: ordinal zero, or one of bits 24 to 29 set, see [Keyring key ids](./formats/keyring-records.md#keyring-key-ids) |
 | `UnknownKeyVersionState` | `UNKNOWN_KEY_VERSION_STATE` | `FromStr` of a name that is no `KeyVersionState` |
 
 ### Other calls

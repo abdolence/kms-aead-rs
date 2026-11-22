@@ -12,7 +12,7 @@ use std::fmt::Display;
 use std::future::Future;
 
 use kms_aead::cache::DekCacheOutcome;
-use tracing::{debug_span, field, Instrument, Span};
+use tracing::{Instrument, Span, debug_span, field};
 
 use crate::errors::{KeyringResult, RegressionRule};
 use crate::metrics;
@@ -475,8 +475,7 @@ pub(crate) fn sweep_batch_failed(keyring: &KeyringId, candidates: u64, error: &i
 }
 
 /// A batch of a sweep that returned a different number of outcomes from it was given candidates:
-/// the sweep counts at most `candidates` outcomes, and the difference as failed when there are
-/// fewer.
+/// the sweep counts every candidate of the batch as failed, and none of its outcomes.
 pub(crate) fn sweep_batch_outcomes_mismatched(keyring: &KeyringId, candidates: u64, outcomes: u64) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),

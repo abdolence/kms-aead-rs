@@ -31,7 +31,6 @@ that read the shred's first write logs an `INFO` instead.
 | `WARN`: a read of a compromised version under the `Allow` policy | values under a leaked DEK are being read | the sweep of [A plaintext DEK leaked](./runbook.md#a-plaintext-dek-leaked) |
 | `WARN`: a read refused because its version is retired or destroyed | a value the sweep missed | `reinstate` a retired version, and sweep again |
 | `WARN`: a record a sweep could not re-encrypt, or `SweepReport::failed` above zero | a record left under an old version | the cause in the event's `error`, see [Running a sweep](./sweeps.md#running-a-sweep) |
-| `WARN`, once per process: the first read of a legacy layout | values not yet upgraded | [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values) |
 
 ### The process and the KMS
 

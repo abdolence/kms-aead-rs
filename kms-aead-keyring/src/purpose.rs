@@ -2,10 +2,13 @@
 //!
 //! The keyring reads a key id's purpose from its two high bits: bit 31 set for deterministic
 //! versions, bit 30 for beacon versions, both for MAC versions, neither for randomised ones.
-//! Bits 0 to 29 are the ordinal, from 1, counted per purpose. Randomised versions are therefore
+//! Bits 0 to 23 are the ordinal, from 1, counted per purpose. Randomised versions are therefore
 //! `1, 2, 3, …`, deterministic ones `2147483649, 2147483650, …`, beacon ones
-//! `1073741825, 1073741826, …` and MAC ones `3221225473, 3221225474, …`. An id whose ordinal is
-//! zero is reserved: no version has it. Ids are never reused: a destroyed version keeps its id.
+//! `1073741825, 1073741826, …` and MAC ones `3221225473, 3221225474, …`. Two kinds of id are
+//! reserved, and no version has one: an id whose ordinal is zero, and an id with any of bits 24
+//! to 29 set. Those six bits are kept for later purposes, so a reader refuses such an id rather
+//! than take it for a version of a purpose it knows. Ids are never reused: a destroyed version
+//! keeps its id.
 
 use std::fmt::{Display, Formatter};
 
@@ -16,7 +19,8 @@ use crate::errors::{KeyPurposeMismatchError, KeyringError, KeyringResult};
 const DETERMINISTIC_KEY_ID_BIT: u32 = 1 << 31;
 const BEACON_KEY_ID_BIT: u32 = 1 << 30;
 const MAC_KEY_ID_BITS: u32 = DETERMINISTIC_KEY_ID_BIT | BEACON_KEY_ID_BIT;
-const KEY_ID_ORDINAL_MASK: u32 = BEACON_KEY_ID_BIT - 1;
+const KEY_ID_ORDINAL_MASK: u32 = (1 << 24) - 1;
+const RESERVED_KEY_ID_BITS: u32 = !(MAC_KEY_ID_BITS | KEY_ID_ORDINAL_MASK);
 
 /// What a key version is for. A key of one purpose never serves another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,9 +110,11 @@ impl Display for Purpose {
     }
 }
 
-/// Whether no version can have `key_id`: its ordinal is zero.
+/// Whether no version can have `key_id`: its ordinal is zero, or it sets a bit kept for later
+/// purposes.
 pub(crate) fn is_reserved_key_id(key_id: KeyId) -> bool {
-    key_id.as_u32() & KEY_ID_ORDINAL_MASK == 0
+    let id = key_id.as_u32();
+    id & KEY_ID_ORDINAL_MASK == 0 || id & RESERVED_KEY_ID_BITS != 0
 }
 
 /// `key_id` when it is not reserved: the check of an id a caller names before the keyring reads
@@ -125,7 +131,7 @@ pub(crate) fn unreserved_key_id(key_id: KeyId) -> KeyringResult<KeyId> {
 }
 
 /// The key id of the version after `key_id` in its purpose, or `None` once the ordinals of the
-/// purpose run out at 2^30 - 1.
+/// purpose run out at 2^24 - 1.
 #[cfg(feature = "admin")]
 pub(crate) fn next_key_id(key_id: KeyId) -> Option<KeyId> {
     let id = key_id.as_u32();
@@ -137,8 +143,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_ordinal_of_zero_is_reserved_under_every_purpose() {
-        for id in [0, 1 << 31, 1 << 30, 3 << 30] {
+    fn ordinals_of_zero_and_from_2_to_the_24_are_reserved_under_every_purpose() {
+        for purpose_bits in [0, 1 << 31, 1 << 30, 3 << 30] {
+            assert!(!is_reserved_key_id(KeyId::new(
+                purpose_bits | ((1 << 24) - 1)
+            )));
+        }
+        for id in [
+            0,
+            1 << 31,
+            1 << 30,
+            3 << 30,
+            1 << 24,
+            (1 << 31) | (1 << 24) | 1,
+            (1 << 30) | (1 << 29) | 1,
+            u32::MAX,
+        ] {
             assert!(matches!(
                 unreserved_key_id(KeyId::new(id)),
                 Err(KeyringError::ReservedKeyId(refused)) if refused == KeyId::new(id)
@@ -158,10 +178,10 @@ mod tests {
     #[cfg(feature = "admin")]
     fn the_last_ordinal_of_each_purpose_has_no_next() {
         for last in [
-            (1 << 30) - 1,
-            (1 << 31) | ((1 << 30) - 1),
-            u32::MAX >> 1,
-            u32::MAX,
+            (1 << 24) - 1,
+            (1 << 31) | ((1 << 24) - 1),
+            (1 << 30) | ((1 << 24) - 1),
+            (3 << 30) | ((1 << 24) - 1),
         ] {
             assert_eq!(next_key_id(KeyId::new(last)), None);
         }

@@ -54,8 +54,16 @@ pub use export::{EncryptedKeyset, KeysetSelection};
 /// Before the compare-and-swap, it verifies the signature it is about to write under the
 /// signer's own key on `B`. A `NoRecordSigner` admin refuses to write over a signed record with
 /// [`KeyringError::RecordSignerMissing`](crate::KeyringError::RecordSignerMissing), except
-/// through [`dangerously_unsign_record`](Self::dangerously_unsign_record). Every refusal comes
-/// before any store write.
+/// through [`dangerously_unsign_record`](Self::dangerously_unsign_record), and under
+/// [`RecordSignaturePolicy::Required`](crate::RecordSignaturePolicy::Required) it writes nothing,
+/// `dangerously_unsign_record` included, and refuses before any KMS or store call. Every refusal
+/// comes before any store write.
+///
+/// Every write refuses a record that holds members this release does not know, which a later
+/// release can write, with [`KeyringError::RecordInvalid`](crate::KeyringError::RecordInvalid)
+/// and the reason
+/// [`UnknownMembers`](crate::errors::RecordInvalidReason::UnknownMembers), before the
+/// compare-and-swap: the record it writes would drop them.
 pub struct KeyringAdmin<S: KeyringStore, P, B, R = NoRecordSigner> {
     keyring: Keyring<S, P, B>,
     signer: R,
@@ -91,12 +99,15 @@ where
 
     /// Rewrites the record without its signature, with no other change: the one write a
     /// `NoRecordSigner` admin makes over a signed record, for an administration that stops signing
-    /// a keyring. Switch every reader from `Required` to `VerifyIfSigned` first; running readers
-    /// under `VerifyIfSigned` refuse the result with `RECORD_SIGNATURE_REMOVED` until they restart.
+    /// a keyring. Switch every reader from `Required` to `VerifyIfSigned` first, the registry of
+    /// this admin included; running readers under `VerifyIfSigned` refuse the result with
+    /// `RECORD_SIGNATURE_REMOVED` until they restart.
     ///
     /// # Errors
     ///
-    /// The store's errors, and the errors of a write as for [`rotate`](Self::rotate).
+    /// [`KeyringError::RecordSignerMissing`](crate::KeyringError::RecordSignerMissing) under
+    /// `Required`, before any store call; the store's errors, and the errors of a write as for
+    /// [`rotate`](Self::rotate).
     pub async fn dangerously_unsign_record(&self) -> KeyringResult<()> {
         let keyring = &self.keyring;
         keyring
@@ -175,12 +186,20 @@ where
     /// [`Transition::Rotate`](crate::Transition::Rotate) naming the pending version when the
     /// purpose has one already,
     /// [`KeyringError::RecordRegressed`](crate::KeyringError::RecordRegressed) when the stored
-    /// record moves backwards from the cached one, and
+    /// record moves backwards from the cached one,
+    /// [`KeyringError::RecordInvalid`](crate::KeyringError::RecordInvalid) with
+    /// `UnknownMembers` when it holds members this release does not know,
     /// [`KeyringError::RecordConflict`](crate::KeyringError::RecordConflict) after
-    /// [`cas_retries`](crate::KeyringOptions::cas_retries) conflicts.
+    /// [`cas_retries`](crate::KeyringOptions::cas_retries) conflicts, and the refusals of
+    /// [Record signing](KeyringAdmin#record-signing).
     pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyId> {
         let keyring = &self.keyring;
         spans::in_span(spans::rotate(keyring.id(), purpose), async {
+            // Refused here, before the KMS call, as well as in `write`, before any store call.
+            keyring
+                .cache
+                .verifier()
+                .check_writer(&self.signer, keyring.id())?;
             let algorithm = keyring.record().algorithm_of(purpose)?;
             let new = NewVersion::generate::<P, B>(algorithm, &keyring.provider).await?;
             let staged = keyring
@@ -292,6 +311,10 @@ where
     pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
         let keyring = &self.keyring;
         spans::in_span(spans::rotate(keyring.id(), algorithm.purpose()), async {
+            keyring
+                .cache
+                .verifier()
+                .check_writer(&self.signer, keyring.id())?;
             let new = NewVersion::generate::<P, B>(algorithm, &keyring.provider).await?;
             let staged = keyring
                 .cache
@@ -347,6 +370,10 @@ where
         unreserved_key_id(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::mark_compromised(keyring.id(), key_id), async {
+            keyring
+                .cache
+                .verifier()
+                .check_writer(&self.signer, keyring.id())?;
             // `None` when the cached record has no active `key_id`, and `Some(None)` when the
             // replacement's key could not be encrypted, which is not tried again in the write.
             let cached = keyring.record();
@@ -558,6 +585,10 @@ where
     pub async fn reencrypt_deks(&self) -> KeyringResult<Vec<DekReencryption>> {
         let keyring = &self.keyring;
         spans::in_span(spans::reencrypt_deks(keyring.id()), async {
+            keyring
+                .cache
+                .verifier()
+                .check_writer(&self.signer, keyring.id())?;
             let mut reencrypted = Vec::new();
             for (_, encrypted_dek) in keyring.record().encrypted_deks() {
                 let new_encrypted_dek = self.reencrypted(&encrypted_dek).await?;

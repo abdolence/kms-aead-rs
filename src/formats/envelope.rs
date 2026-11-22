@@ -1,44 +1,7 @@
-use crate::errors::{
-    KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
-};
+use crate::errors::KmsAeadEncryptionError;
 
 use crate::formats::{Bare, Envelope};
 use crate::{Encrypted, EncryptedDataEncryptionKey, KmsAeadResult};
-
-/// The layout of a stored [`Envelope`] value, by its first bytes, whether or not this build reads
-/// it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EnvelopeLayout {
-    /// `[w: u32 BE]` with `w` from 1, so the first byte is `0x00` and the first four are not
-    /// all zero. The 4-byte length prefix of 32-bit targets before 0.24.0 has the same framing;
-    /// only the decrypted key tells it apart.
-    Tink,
-    /// The envelope layout v1 of 0.29: `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK]`.
-    V1,
-    /// The 8-byte length prefix written up to 0.28.1. No encrypted DEK reaches 2^32 bytes, so its
-    /// first four bytes are zero.
-    LengthPrefixed,
-}
-
-impl TryFrom<&[u8]> for EnvelopeLayout {
-    type Error = KmsAeadError;
-
-    fn try_from(value: &[u8]) -> KmsAeadResult<Self> {
-        match value {
-            [0x00, 0x00, 0x00, 0x00, ..] => Ok(EnvelopeLayout::LengthPrefixed),
-            [0x00, ..] => Ok(EnvelopeLayout::Tink),
-            [0x01, ..] => Ok(EnvelopeLayout::V1),
-            [_, ..] => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                "The cipher text starts with a byte that starts no layout",
-            )),
-            [] => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                "Empty cipher text has no layout",
-            )),
-        }
-    }
-}
 
 /// The most bytes of an encrypted DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
 const MAX_ENCRYPTED_DEK_LEN: u32 = 4096;
@@ -74,15 +37,8 @@ impl<T> Encrypted<T, Envelope> {
         Self::try_from(bytes)
     }
 
-    /// The bare value and the encrypted DEK of a value in Tink's KMS envelope format.
-    ///
-    /// # Errors
-    ///
-    /// [`KmsAeadError::LegacyFormat`] with [`KmsAeadLegacyFormat::EnvelopeV1`] or
-    /// [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on the envelope layouts of 0.29 and
-    /// earlier, which a value holds only with the deprecated `legacy-formats` feature, and which
-    /// `KmsAeadEnvelope::upgrade_legacy_value` rewrites. A value in Tink's format always
-    /// separates.
+    /// The bare value and the encrypted DEK of a value in Tink's KMS envelope format. Every
+    /// `Encrypted<T, Envelope>` is in it, as `TryFrom` checks, so the value always separates.
     pub fn separate(&self) -> KmsAeadResult<(Encrypted<T, Bare>, EncryptedDataEncryptionKey)> {
         let (encrypted_dek_bytes, bare) = split_encrypted_dek_and_bare_value(self.value())?;
         Ok((
@@ -129,19 +85,33 @@ pub(crate) fn envelope_header(
 ///
 /// `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or a first byte that starts no layout,
 /// `INVALID_CIPHER_TEXT_FORMAT` on an encrypted DEK length outside 1 to 4,096 bytes or past the
-/// end of the value, and [`KmsAeadError::LegacyFormat`] on the layouts of 0.29 and earlier.
+/// end of the value, and `LEGACY_FORMAT` on the envelope layouts of 0.29 and earlier.
 pub(crate) fn split_encrypted_dek_and_bare_value(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
-    match EnvelopeLayout::try_from(value)? {
-        EnvelopeLayout::Tink => {}
-        EnvelopeLayout::V1 => {
-            return Err(KmsAeadLegacyFormatError::create(
-                KmsAeadLegacyFormat::EnvelopeV1,
-            ))
+    match value {
+        // The 8-byte length prefix written up to 0.28.1: no encrypted DEK reaches 2^32 bytes, so
+        // its first four bytes are zero, and those of Tink's `w` never are.
+        [0x00, 0x00, 0x00, 0x00, ..] => {
+            return Err(KmsAeadEncryptionError::legacy_format(
+                "the length-prefixed envelope layout",
+            ));
         }
-        EnvelopeLayout::LengthPrefixed => {
-            return Err(KmsAeadLegacyFormatError::create(
-                KmsAeadLegacyFormat::LengthPrefixedEnvelope,
-            ))
+        [0x00, ..] => {}
+        [0x01, ..] => {
+            return Err(KmsAeadEncryptionError::legacy_format(
+                "the envelope layout v1",
+            ));
+        }
+        [_, ..] => {
+            return Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "The cipher text starts with a byte that starts no layout",
+            ));
+        }
+        [] => {
+            return Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "Empty cipher text has no layout",
+            ));
         }
     }
     let invalid = || {
@@ -176,6 +146,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::errors::KmsAeadError;
     use crate::test_provider::renderings;
 
     const ENCRYPTED: &[u8] = b"payload";
@@ -295,30 +266,20 @@ mod tests {
         }
     }
 
-    /// Without `legacy-formats` a value in these layouts is refused when it is read, and with it
-    /// the value is read and refused by `separate`.
     #[test]
-    fn separate_refuses_the_layouts_of_0_29_and_earlier() {
-        let envelopes = [
-            (
-                [
-                    &hex::decode("01023138000777726170706564").unwrap()[..],
-                    &BARE,
-                ]
-                .concat(),
-                KmsAeadLegacyFormat::EnvelopeV1,
-            ),
-            (
-                [&[0x00; 7][..], &[0x07], ENCRYPTED_DEK, &BARE].concat(),
-                KmsAeadLegacyFormat::LengthPrefixedEnvelope,
-            ),
-        ];
-        for (envelope, format) in envelopes {
-            let result = Encrypted::<String, Envelope>::try_from(envelope)
-                .and_then(|value| value.separate());
+    fn the_layouts_of_0_29_and_earlier_are_refused_when_read() {
+        let envelope_v1 = [
+            &hex::decode("01023138000777726170706564").unwrap()[..],
+            &BARE,
+        ]
+        .concat();
+        let length_prefixed = [&[0x00; 7][..], &[0x07], ENCRYPTED_DEK, &BARE].concat();
+        for envelope in [envelope_v1, length_prefixed] {
+            let result = Encrypted::<String, Envelope>::try_from(envelope);
             assert!(
-                matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
-                "{format:?}: {result:?}"
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "LEGACY_FORMAT"),
+                "{result:?}"
             );
         }
     }

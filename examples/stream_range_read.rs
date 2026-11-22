@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::stream::{decrypt_stream, EnvelopeStreamHeader, StreamEncryptor, StreamFormat};
+use kms_aead::stream::{EnvelopeStreamHeader, StreamEncryptor, StreamFormat, decrypt_stream};
 use kms_aead::{KmsAeadEnvelope, KmsAeadResult};
 
 const AAD: &[u8] = b"backups/2026-10";

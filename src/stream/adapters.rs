@@ -7,15 +7,15 @@ use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use super::gatherer::{ChunkError, ChunkGatherer};
 use super::{StreamDecryptor, StreamEncryptor};
+use crate::KmsAeadResult;
 use crate::backends::{AeadBackend, Failure};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
-use crate::KmsAeadResult;
 
 /// A failure inside an adapter: of the streamed value, or of the source or the sink the caller
 /// gave it. The wrappers return each as an `io::Error`, and the two functions as a
@@ -449,10 +449,10 @@ impl<B: AeadBackend, R: AsyncRead + Unpin> DecryptingReader<B, R> {
                     return Poll::Ready(Err(AdapterError::Stream {
                         kind,
                         error: error.clone(),
-                    }))
+                    }));
                 }
                 ReaderState::SourceFailed => {
-                    return Poll::Ready(Err(AdapterError::Source(AdapterError::broken_pipe())))
+                    return Poll::Ready(Err(AdapterError::Source(AdapterError::broken_pipe())));
                 }
                 ReaderState::Gathering => ready!(self.poll_gather(cx))?,
             }
@@ -558,28 +558,33 @@ pub(super) fn inner_kms_aead_error(error: &io::Error) -> Option<&KmsAeadError> {
         .and_then(|inner| inner.downcast_ref::<KmsAeadError>())
 }
 
-/// Reads from `source` until `header` holds `len` bytes, the header of a streamed value, and no
-/// further, so that the source stays positioned after it. Not part of the API, as
-/// [`__HeaderGatherer`](super::__HeaderGatherer).
+/// Reads the header of a streamed value from the front of `source` into `header`, for a
+/// [`DecryptingReader`] that starts after it: it reads until `header` holds at least `len` bytes,
+/// and no byte past them, so that `source` stays positioned at the first chunk. The bytes already
+/// in `header` count, so a caller that learns the header's length from its first bytes, as the
+/// envelope form's `w`, reads those, then calls again with the whole length.
+///
+/// [`KmsAeadEnvelope::decrypting_reader`](crate::KmsAeadEnvelope::decrypting_reader) reads the
+/// envelope form with it; a caller that picks the DEK by the header itself reads the header with
+/// it, makes the decryptor and passes `source` to [`DecryptingReader::new`].
 ///
 /// # Errors
 ///
 /// `STREAM_LENGTH` when the source ends first, and `STREAM_IO` for an error of the source, as
 /// [`DecryptingReader`] returns them.
-#[doc(hidden)]
-pub async fn __read_header<R: AsyncRead + Unpin>(
+pub async fn read_stream_header<R: AsyncRead + Unpin>(
     source: &mut R,
     header: &mut Vec<u8>,
     len: usize,
 ) -> KmsAeadResult<()> {
     let mut filled = header.len();
-    header.resize(len, 0);
+    header.resize(len.max(filled), 0);
     while filled < len {
         match source.read(&mut header[filled..]).await {
             Ok(0) => {
                 return Err(KmsAeadEncryptionError::stream_length(
                     "The source ended inside the header of the streamed value",
-                ))
+                ));
             }
             Ok(read) => filled += read,
             Err(error) => return Err(AdapterError::Source(error).into_stream()),

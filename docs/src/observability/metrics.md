@@ -83,12 +83,12 @@ The values of the attributes that name the call:
 | | `beacon` | an envelope's beacon |
 | | `generate_dek` | `generate_encrypted_dek` and `generate_encrypted_deterministic_dek` |
 | | `decrypt_dek` | `decrypt_deterministic_dek` |
-| | `reencrypt_dek` | `reencrypt_dek`, `reencrypt_encrypted_dek` and the deprecated `upgrade_legacy_value` and `upgrade_legacy_encrypted_dek` |
+| | `reencrypt_dek` | `reencrypt_dek` and `reencrypt_encrypted_dek` |
 | | `stream_encrypt`, `stream_decrypt` | the stream calls |
 | | `sign`, `verify`, `mac`, `verify_mac` | a `Signer`, a `Verifier` and an `Authenticator` |
 | `kms_aead.operation` on `kms_aead.kms.duration` | `encrypt_dek`, `decrypt_dek`, `random`, `sign`, `public_key`, `encrypt_dek_with_public_key` | the request to the KMS, or the local encryption with a public key |
-| `kms_aead.mode` | `per_call`, `store_less` | an envelope's `encrypt`, `decrypt`, the stream calls, `reencrypt_dek` and `upgrade_legacy_value` |
-| | `caller_dek` | the `*_with_dek` and `*_with_encrypted_dek` calls, `beacon`, the calls that generate or decrypt a DEK, `reencrypt_encrypted_dek`, `upgrade_legacy_encrypted_dek`, and an `Authenticator`'s `mac` and `verify_mac` |
+| `kms_aead.mode` | `per_call`, `store_less` | an envelope's `encrypt`, `decrypt`, the stream calls and `reencrypt_dek` |
+| | `caller_dek` | the `*_with_dek` and `*_with_encrypted_dek` calls, `beacon`, the calls that generate or decrypt a DEK, `reencrypt_encrypted_dek`, and an `Authenticator`'s `mac` and `verify_mac` |
 | | `signature` | a `Signer` and a `Verifier` |
 | | `keyring` | a keyring's calls |
 

@@ -25,9 +25,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use kms_aead::KekRef;
 use kms_aead::backends::AeadBackend;
 use kms_aead::cache::DekCache;
-use kms_aead::KekRef;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -38,13 +38,13 @@ use crate::record_signing::MaybeRecordSigner;
 use crate::record_signing::RecordVerifier;
 use crate::spans::{self, LoadChanged, LoadReason, Reload};
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, WatchEvent};
+use crate::{KeyId, KeyVersion, KeyVersionState, KeyringError, KeyringId, KeyringRecord, Purpose};
 #[cfg(feature = "admin")]
 use crate::{
     errors::RecordConflictError,
     record::RecordEdit,
     store::{Deletion, Swap},
 };
-use crate::{KeyId, KeyVersion, KeyVersionState, KeyringError, KeyringId, KeyringRecord, Purpose};
 
 /// The cached record of one keyring, and the store it came from.
 pub(crate) struct RecordCache<S: KeyringStore, B> {
@@ -136,12 +136,12 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// The cached record, revalidated first when it is older than the TTL and no other call is
     /// refreshing it.
     pub(crate) async fn current(&self) -> Arc<KeyringRecord> {
-        if self.revalidation_due() {
-            if let Ok(refresh) = self.refresh.try_lock() {
-                // Another call may have revalidated between the check and the lock.
-                if self.revalidation_due() {
-                    self.revalidate(&refresh, LoadReason::Ttl).await;
-                }
+        if self.revalidation_due()
+            && let Ok(refresh) = self.refresh.try_lock()
+        {
+            // Another call may have revalidated between the check and the lock.
+            if self.revalidation_due() {
+                self.revalidate(&refresh, LoadReason::Ttl).await;
             }
         }
         self.record()
@@ -450,7 +450,8 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// record's signature: a signing admin's write re-signs a signed record and refuses an
     /// unsigned one, except `sign_record`, and an unsigned admin's write refuses a signed record,
     /// except `dangerously_unsign_record`. Each refusal comes before any store write, and a new
-    /// signature is verified under the signer's own key before the compare-and-swap.
+    /// signature is verified under the signer's own key before the compare-and-swap. Under
+    /// `Required`, an unsigned admin's write is refused before any store call.
     pub(crate) async fn write<T, R: MaybeRecordSigner>(
         &self,
         cas_retries: u32,
@@ -458,6 +459,7 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
         write: SignedWrite,
         mut change: impl AsyncFnMut(&mut RecordEdit) -> KeyringResult<T>,
     ) -> KeyringResult<T> {
+        self.verifier.check_writer(signer, &self.id)?;
         let refresh = self.refresh.lock().await;
         for conflicts in 0..=cas_retries {
             let stored = self.read_for_write(&refresh).await?;
@@ -481,12 +483,14 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// lifecycle change, then deletes the record at the revision written, and takes the
     /// deletion. A record whose every version is destroyed already is deleted without a write,
     /// and a record already gone is taken as deleted. A conflict of the write or of the delete
-    /// starts again from a new read, up to `cas_retries` times.
+    /// starts again from a new read, up to `cas_retries` times. The refusals are those of
+    /// [`write`](Self::write).
     pub(crate) async fn shred<R: MaybeRecordSigner>(
         &self,
         cas_retries: u32,
         signer: &R,
     ) -> KeyringResult<()> {
+        self.verifier.check_writer(signer, &self.id)?;
         let refresh = self.refresh.lock().await;
         for conflicts in 0..=cas_retries {
             let stored = match self.read_for_write(&refresh).await {
@@ -501,12 +505,12 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
                 edit.destroy_all(Timestamp::now());
                 self.swap(&refresh, signer, edit, &stored.revision).await?
             };
-            if let Some(revision) = revision {
-                if self.store.delete(&self.id, &revision).await? == Deletion::Deleted {
-                    self.take_deletion(&refresh, Found::Shredded)?;
-                    spans::record_cas_retries(conflicts);
-                    return Ok(());
-                }
+            if let Some(revision) = revision
+                && self.store.delete(&self.id, &revision).await? == Deletion::Deleted
+            {
+                self.take_deletion(&refresh, Found::Shredded)?;
+                spans::record_cas_retries(conflicts);
+                return Ok(());
             }
             spans::write_conflict(&self.id, conflicts.saturating_add(1));
         }
@@ -545,13 +549,7 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
         let record = edit.finish()?.signed_by::<B, R>(signer).await?;
         match self.store.compare_and_swap(&record, Some(expected)).await? {
             Swap::Written(revision) => {
-                self.install(
-                    refresh,
-                    Stored {
-                        record,
-                        revision: revision.clone(),
-                    },
-                );
+                self.install(refresh, Stored::new(record, revision.clone()));
                 Ok(Some(revision))
             }
             Swap::Conflict => Ok(None),
@@ -565,10 +563,10 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
         })
     }
 
-    /// The store's record, refused when it moves backwards from the cached one, for a write to
-    /// build on. A record gone from the store is taken as deleted, and is `RecordMissing`, also
-    /// when the cache took the deletion before: the store is then not read, as another record
-    /// may hold the id.
+    /// The store's record, refused when it moves backwards from the cached one, or when it holds
+    /// members this release does not know, for a write to build on. A record gone from the store
+    /// is taken as deleted, and is `RecordMissing`, also when the cache took the deletion before:
+    /// the store is then not read, as another record may hold the id.
     async fn read_for_write(
         &self,
         refresh: &RefreshGuard<'_>,
@@ -598,6 +596,7 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
             match held.check_successor(&stored.record) {
                 Ok(()) => {
                     spans::record_load(LoadChanged::Unchanged, Some(&stored.revision));
+                    stored.record.check_writable()?;
                     Ok(stored)
                 }
                 Err(rule) => {

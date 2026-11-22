@@ -23,6 +23,7 @@ use secret_vault_value::SecretValue;
 /// version that encrypted it, and decrypting uses that version, so keys encrypted before a rotation
 /// still decrypt afterwards.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct AzureKmsKeyRef {
     /// Vault URL, such as `https://my-vault.vault.azure.net`.
     pub vault_url: String,

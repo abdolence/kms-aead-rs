@@ -11,6 +11,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256, Sha512};
 use tokio::io::AsyncReadExt;
 
+use crate::AeadAlgorithm;
 #[cfg(feature = "aws-lc-rs")]
 use crate::backends::AwsLc;
 #[cfg(feature = "ring")]
@@ -18,7 +19,6 @@ use crate::backends::Ring;
 #[cfg(feature = "rustcrypto")]
 use crate::backends::RustCrypto;
 use crate::formats::tink_output_prefix;
-use crate::AeadAlgorithm;
 
 use super::tests::{fetch, pieces};
 use super::*;
@@ -261,7 +261,7 @@ async fn read_by_reader<B: AeadBackend>(
                 return WholeRead {
                     yielded,
                     failure: None,
-                }
+                };
             }
             Ok(read) => yielded.extend_from_slice(&buffer[..read]),
             Err(error) => {

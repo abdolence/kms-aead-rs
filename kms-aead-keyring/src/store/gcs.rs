@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
 use gcloud_sdk::google::storage::v2::{
-    write_object_request, write_object_response, ChecksummedData, DeleteObjectRequest,
-    ListObjectsRequest, Object, ReadObjectRequest, WriteObjectRequest, WriteObjectSpec,
+    ChecksummedData, DeleteObjectRequest, ListObjectsRequest, Object, ReadObjectRequest,
+    WriteObjectRequest, WriteObjectSpec, write_object_request, write_object_response,
 };
 use gcloud_sdk::tonic::metadata::{Ascii, MetadataValue};
 use gcloud_sdk::tonic::{self, Code};
@@ -303,10 +303,10 @@ impl GcsKeyringStore {
                 "The read returned no object metadata",
             )
         })?;
-        Ok(Revalidation::Changed(Stored {
-            record: KeyringRecord::from_json(id, &document)?,
+        Ok(Revalidation::Changed(Stored::new(
+            KeyringRecord::from_json(id, &document)?,
             revision,
-        }))
+        )))
     }
 }
 
@@ -374,7 +374,7 @@ impl KeyringStore for GcsKeyringStore {
                     StoreKind::Gcs,
                     StoreOperation::CompareAndSwap,
                     Arc::new(status),
-                ))
+                ));
             }
         };
         match response.into_inner().write_status {

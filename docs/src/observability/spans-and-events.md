@@ -147,7 +147,6 @@ calls do. The spans carry no payload, signature, tag or key bytes.
 Besides the spans, the library logs:
 
 - `WARN`, inside the KMS span: a GCP or Vault Transit response without a key version;
-- `WARN`, once per process and layout: the first read of a legacy layout with `legacy-formats`;
 - `WARN`, when a Vault Transit provider is created: an `http` address to another host, or a system
   CA certificate that cannot be loaded;
 - `WARN`, on the `kms_aead::json` target: a `JsonEncoded` value that does not decode, see

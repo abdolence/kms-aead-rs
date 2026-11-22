@@ -8,7 +8,7 @@ use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use bytes::{Buf, Bytes};
 use futures_core::Stream;
@@ -17,9 +17,9 @@ use secret_vault_value::SecretValue;
 use super::adapters::inner_kms_aead_error;
 use super::gatherer::{ChunkGatherer, DecryptedChunk};
 use super::{StreamDecryptor, StreamEncryptor};
+use crate::KmsAeadResult;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
-use crate::KmsAeadResult;
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
@@ -192,24 +192,27 @@ impl<B, S> Debug for EncryptingStream<B, S> {
     }
 }
 
-/// Reads the header of a streamed value from the front of a `Stream` of [`Bytes`] and keeps the
-/// rest of the item it ended in, for [`DecryptingStream`] to start from, so that no byte of the
-/// value is lost or read twice whatever the sizes of the items. Not part of the API: it serves
-/// `KmsAeadEnvelope::decrypting_stream` and kms-aead-keyring, and changes only in a minor release
-/// of kms-aead, which kms-aead-keyring requires to match its own.
-#[doc(hidden)]
-pub struct __HeaderGatherer<S> {
+/// Reads the header of a streamed value from the front of a `Stream` of [`Bytes`], for a
+/// [`DecryptingStream`] that starts after it. The items may split the value anywhere: the gatherer
+/// keeps the rest of the item the header ends in, and [`into_stream`](Self::into_stream) starts
+/// the stream with it, so that no byte of the value is lost or read twice.
+///
+/// [`KmsAeadEnvelope::decrypting_stream`](crate::KmsAeadEnvelope::decrypting_stream) reads the
+/// envelope form with it; a caller that picks the DEK by the header itself reads the header with
+/// it, makes the decryptor and calls `into_stream`.
+pub struct StreamHeaderGatherer<S> {
     source: S,
     /// The part of the source's last item that the header did not take.
     pending: Bytes,
     header: Vec<u8>,
 }
 
-impl<S, E> __HeaderGatherer<S>
+impl<S, E> StreamHeaderGatherer<S>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: Into<BoxError>,
 {
+    /// A gatherer over `source`, which yields the stored value from its first byte.
     pub fn new(source: S) -> Self {
         Self {
             source,
@@ -235,7 +238,7 @@ where
                     None => {
                         return Err(KmsAeadEncryptionError::stream_length(
                             "The source ended inside the header of the streamed value",
-                        ))
+                        ));
                     }
                 }
                 continue;
@@ -247,7 +250,8 @@ where
         Ok(&self.header[..len])
     }
 
-    /// A stream of the plaintext that `decryptor` decrypts from what follows the header.
+    /// A stream of the plaintext that `decryptor` decrypts from the bytes after the ones
+    /// [`read`](Self::read) returned last, the whole header.
     pub fn into_stream<B: AeadBackend>(
         self,
         decryptor: Arc<StreamDecryptor<B>>,

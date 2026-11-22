@@ -191,8 +191,8 @@ fn call_attributes(
 }
 
 #[tokio::test]
-async fn an_encryption_and_a_decryption_record_their_values_and_plaintext_bytes_under_the_version(
-) -> TestResult {
+async fn an_encryption_and_a_decryption_record_their_values_and_plaintext_bytes_under_the_version()
+-> TestResult {
     let admin = keyring("metrics-values").await?;
     let keyring = admin.keyring();
     let key_id = keyring

@@ -1,8 +1,8 @@
 use rsb_derive::*;
 
 use crate::errors::*;
-use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::formats::PublicKeyFormat;
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::spans::{self, kms};
 use crate::*;
 use aws_sdk_kms::operation::decrypt::builders::DecryptFluentBuilder;
@@ -15,6 +15,7 @@ use secret_vault_value::SecretValue;
 
 /// An AWS KMS key that encrypts data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct AwsKmsKeyRef {
     /// The AWS account that owns the key, used to build its ARN.
     pub account_id: String,
@@ -79,6 +80,9 @@ impl AwsKmsProviderOptions {
 ///
 /// With an `RSA_*` key of usage `ENCRYPT_DECRYPT` it also decrypts an encrypted DEK that a
 /// producer encrypted with the key's public half, which [`public_key`](Self::public_key) returns.
+///
+/// A clone shares the SDK client and its connection pool.
+#[derive(Clone)]
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
@@ -326,7 +330,7 @@ impl KmsAeadDecryptionProvider for AwsKmsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_http::{answer_with, ReceivedRequest};
+    use crate::test_http::{ReceivedRequest, answer_with};
     use aws_sdk_kms::config::http::HttpResponse;
     use aws_sdk_kms::config::retry::RetryConfig;
     use aws_sdk_kms::config::{Credentials, Region};
@@ -339,7 +343,7 @@ mod tests {
 
     use crate::formats::Envelope;
     use crate::test_provider::{
-        public_key_encrypted_dek, RsaOaepSuite, TestBackend, TinkEnvelope, ENCRYPTED_BLOCK,
+        ENCRYPTED_BLOCK, RsaOaepSuite, TestBackend, TinkEnvelope, public_key_encrypted_dek,
     };
 
     const REGION: &str = "eu-west-1";
@@ -425,8 +429,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_decryption_names_the_key_the_algorithm_and_the_block(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_decryption_names_the_key_the_algorithm_and_the_block()
+    -> KmsAeadResult<()> {
         let (provider, requests) = provider_recording(
             200,
             &format!(
@@ -460,8 +464,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_header_that_names_a_kek_id_or_a_version_is_refused_before_any_request(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_header_that_names_a_kek_id_or_a_version_is_refused_before_any_request()
+    -> KmsAeadResult<()> {
         for (kek_id, kek_version) in [(&b"orders"[..], None), (b"", Some("3"))] {
             let (provider, requests) = provider_recording(200, "{}").await;
 
@@ -661,9 +665,11 @@ mod tests {
             error.message
         );
         let root_cause = error.root_cause.expect("the service error is kept");
-        assert!(root_cause
-            .downcast_ref::<DecryptError>()
-            .is_some_and(DecryptError::is_incorrect_key_exception));
+        assert!(
+            root_cause
+                .downcast_ref::<DecryptError>()
+                .is_some_and(DecryptError::is_incorrect_key_exception)
+        );
     }
 
     #[tokio::test]
@@ -889,47 +895,6 @@ mod tests {
                 "{:?}",
                 tink.algorithm
             );
-        }
-        Ok(())
-    }
-
-    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
-    // default ChaCha20-Poly1305 and the AWS key that the live tests configure. That key stays
-    // enabled while these exist.
-    #[cfg(feature = "legacy-formats")]
-    const ENVELOPE_FROM_0_28_1: &str = "00000000000000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f9016d64cc226f7525698a42aa79440d72eb0000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c0197410ab39e7f2e03fcb949020110803b199d4e5e7f622192544e6afd92c61bf191d969c8e2bd79558786d3adf0453ebe0883967e7031d5c67d4dbebddd4f05aeca971b7636dbde5946860e8b8069a47514d7c98af6d41f881e50d921ed7eb7568617f632b87134c3d01dc25b292fb39badbe";
-    #[cfg(feature = "legacy-formats")]
-    const ENVELOPE_FROM_0_29: &str = "010000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901328f5ffd046ddc430b18ba1d85738d440000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c2fb61160bcd48c2e564c02d5020110803b5d02b9463971cf911780d692666861a56101335c3d3d047dad9187a4dd15295189e5489017cb4c745c93064abfe217335d46e0cd8f6da27c8997e5ec392560da00e258e81877a60cc0e2a1d06cedfaef2b10d45bb80fda1cb2b81a5f038b24e8c607";
-
-    #[tokio::test]
-    #[cfg(feature = "legacy-formats")]
-    #[cfg_attr(not(feature = "ci-aws"), ignore)]
-    #[expect(deprecated, reason = "tests the deprecated upgrade")]
-    async fn live_key_decrypts_and_upgrades_stored_envelopes() -> KmsAeadResult<()> {
-        let encryption = KmsAeadEnvelope::<_, TestBackend>::with_options(
-            AwsKmsProvider::new(&live_key_ref()).await?,
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-        )?;
-        for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
-            let stored =
-                Encrypted::<SecretValue, Envelope>::try_from(hex::decode(stored).unwrap())?;
-
-            let decrypted = encryption.decrypt(b"test-aad", &stored).await?;
-            let upgraded = encryption
-                .upgrade_legacy_value(b"test-aad", &stored)
-                .await?;
-
-            assert_eq!(decrypted, SecretValue::from("test-secret"));
-            let upgraded = upgraded.expect("a legacy value is upgraded");
-            assert_eq!(upgraded.value()[0], 0x00);
-            assert_eq!(
-                encryption.decrypt(b"test-aad", &upgraded).await?,
-                SecretValue::from("test-secret")
-            );
-            assert!(encryption
-                .upgrade_legacy_value(b"test-aad", &upgraded)
-                .await?
-                .is_none());
         }
         Ok(())
     }

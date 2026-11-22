@@ -98,7 +98,7 @@ impl<B: AeadBackend> Verifier<B> {
                 signed.key_id(),
                 signed.raw_signature(),
             )?;
-            Ok((T::from_payload(payload.to_vec())?, key))
+            Ok((T::from_payload(payload)?, key))
         })
     }
 
@@ -135,7 +135,7 @@ impl<B: AeadBackend> Verifier<B> {
             .keys
             .key_with_id(key_id)
             .map(|key| key.algorithm().as_str());
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: "verify",
             mode: "signature",
             backend: B::NAME,
@@ -203,7 +203,7 @@ mod tests {
         KmsSigningProvider, RawSignature, Signer, SigningAlgorithm, SigningInput, SigningKeyRef,
     };
     use crate::test_provider::{
-        error_code_of, Invoice, TestBackend, INVOICE_PAYLOAD, OTHER_INVOICE_PAYLOAD,
+        INVOICE_PAYLOAD, Invoice, OTHER_INVOICE_PAYLOAD, TestBackend, error_code_of,
     };
 
     /// Another document type with the same bytes as an [`Invoice`].
@@ -219,7 +219,7 @@ mod tests {
             Ok(INVOICE_PAYLOAD.to_vec())
         }
 
-        fn from_payload(_: Vec<u8>) -> KmsAeadResult<Self> {
+        fn from_payload(_: &[u8]) -> KmsAeadResult<Self> {
             Ok(Receipt)
         }
     }
@@ -255,7 +255,7 @@ mod tests {
                 verifier.verify(&test_invoice(), &detached)?,
                 signer.verifying_key()
             );
-            assert_eq!(verifier.verify_signed(&attached)?.0 .0, INVOICE_PAYLOAD);
+            assert_eq!(verifier.verify_signed(&attached)?.0.0, INVOICE_PAYLOAD);
             assert_eq!(
                 verifier.verify_digest(&digest, &by_digest)?,
                 signer.verifying_key()

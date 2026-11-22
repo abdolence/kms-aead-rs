@@ -3,11 +3,11 @@
 
 use std::fmt::{Debug, Formatter};
 
-use super::cipher::{Commitment, Salt, STREAM_KEY_COMMITMENT_LEN, STREAM_SALT_LEN};
-use super::{StreamFormat, BARE_HEADER_LEN, PREFIXED_HEADER_LEN};
+use super::cipher::{Commitment, STREAM_KEY_COMMITMENT_LEN, STREAM_SALT_LEN, Salt};
+use super::{BARE_HEADER_LEN, PREFIXED_HEADER_LEN, StreamFormat};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::formats::envelope::{split_encrypted_dek_len, ENCRYPTED_DEK_LEN_FIELD_SIZE};
-use crate::formats::{split_tink_output_prefix, TINK_OUTPUT_PREFIX_LEN};
+use crate::formats::envelope::{ENCRYPTED_DEK_LEN_FIELD_SIZE, split_encrypted_dek_len};
+use crate::formats::{TINK_OUTPUT_PREFIX_LEN, split_tink_output_prefix};
 use crate::{EncryptedDataEncryptionKey, KeyId, KmsAeadResult};
 
 /// The first 61 bytes of a prefixed streamed value, read before any chunk: Tink's output prefix,

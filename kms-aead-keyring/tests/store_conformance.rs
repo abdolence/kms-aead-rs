@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use kms_aead_keyring::store::{Deletion, KeyringStore, Revalidation, Stored, Swap, WatchEvent};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{KeyringId, KeyringRecord, KeyringResult};
@@ -102,6 +102,26 @@ async fn a_created_record_loads_at_its_revision(store: impl KeyringStore) -> Tes
     let loaded = store.load(&id).await?.ok_or("the record is gone")?;
     assert!(is_same_record(&loaded, &created)?);
     assert_eq!(loaded.revision, revision);
+    Ok(())
+}
+
+/// A loaded record has the canonical digest of the written one, which a record signature covers:
+/// the store keeps every member of the document, `null` ones among them, on a create and on an
+/// update.
+async fn a_loaded_record_keeps_the_written_digest(store: impl KeyringStore) -> TestResult {
+    let id = unique_keyring_id()?;
+    let created = KeyringRecord::from_json(&id, &record(&id, 1)?.to_json()?)?;
+    let revision = written_revision(store.compare_and_swap(&created, None).await?)?;
+    let loaded = store.load(&id).await?.ok_or("the record is gone")?;
+    assert_eq!(loaded.record.canonical_digest(), created.canonical_digest());
+
+    let updated = KeyringRecord::from_json(&id, &record(&id, 2)?.to_json()?)?;
+    written_revision(store.compare_and_swap(&updated, Some(&revision)).await?)?;
+    let reloaded = store.load(&id).await?.ok_or("the record is gone")?;
+    assert_eq!(
+        reloaded.record.canonical_digest(),
+        updated.canonical_digest()
+    );
     Ok(())
 }
 
@@ -327,19 +347,16 @@ async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> Te
 
 /// A store error carries none of the record it failed to write: the encrypted DEK appears neither
 /// as text nor as bytes in the error's `Display`, its `Debug`, or those of its causes.
-/// `failing` is a store whose write at `expected` fails.
+/// `failing` is a store whose create fails.
 #[cfg(any(
     feature = "firestore",
     feature = "postgres",
     feature = "gcs",
     feature = "s3"
 ))]
-async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(
-    failing: S,
-    expected: Option<&S::Revision>,
-) -> TestResult {
+async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(failing: S) -> TestResult {
     let marked = record_holding(&unique_keyring_id()?, 0, MARKED_ENCRYPTED_DEK)?;
-    let error = match failing.compare_and_swap(&marked, expected).await {
+    let error = match failing.compare_and_swap(&marked, None).await {
         Err(error) => error,
         Ok(swap) => return Err(format!("the write did not fail: {swap:?}").into()),
     };
@@ -378,10 +395,37 @@ async fn shutdown_twice_is_a_no_op(store: impl KeyringStore) -> TestResult {
     Ok(())
 }
 
+/// A record the store returns takes an administrative write, which refuses a record holding a
+/// member that the document the store was given lacks.
+#[cfg(all(feature = "ring", feature = "admin"))]
+async fn a_record_it_returns_takes_an_administrative_write<S: KeyringStore>(
+    store: S,
+) -> TestResult {
+    use kms_aead::backends::Ring;
+    use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+    use kms_aead_keyring::{KeyringAlgorithms, KeyringRegistry, KeyringRegistryOptions, Purpose};
+
+    let registry =
+        KeyringRegistry::<S, Ring>::new(store, KeyringRegistryOptions::new().with_watch(false))?;
+    let admin = registry
+        .create(
+            LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from(
+                "conformance-kek".to_string(),
+            )?)?,
+            unique_keyring_id()?,
+            KeyringAlgorithms::new(),
+        )
+        .await?;
+    admin.rotate(Purpose::Randomized).await?;
+    registry.shutdown(None).await;
+    Ok(())
+}
+
 /// Runs every check, each against a store `new_store` returns.
 async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     an_absent_record_loads_as_none(new_store()).await?;
     a_created_record_loads_at_its_revision(new_store()).await?;
+    a_loaded_record_keeps_the_written_digest(new_store()).await?;
     creating_an_existing_record_conflicts(new_store()).await?;
     an_update_at_the_current_revision_writes_a_new_one(new_store()).await?;
     an_update_at_a_stale_revision_conflicts(new_store()).await?;
@@ -394,7 +438,10 @@ async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     a_delete_at_a_stale_revision_conflicts(new_store()).await?;
     a_deleted_record_is_created_again(new_store()).await?;
     a_write_signals_the_watch_of_its_record(new_store()).await?;
-    a_delete_signals_the_watch_of_its_record(new_store()).await
+    a_delete_signals_the_watch_of_its_record(new_store()).await?;
+    #[cfg(all(feature = "ring", feature = "admin"))]
+    a_record_it_returns_takes_an_administrative_write(new_store()).await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -409,7 +456,7 @@ async fn the_memory_store_conforms() -> TestResult {
 mod firestore_store {
     use std::error::Error;
 
-    use firestore::{FirestoreCollectionId, FirestoreDb, FirestoreTimestamp};
+    use firestore::{FirestoreCollectionId, FirestoreDb};
     use kms_aead_keyring::store::FirestoreKeyringStore;
 
     use super::*;
@@ -430,13 +477,17 @@ mod firestore_store {
         conformance(|| store.clone()).await
     }
 
-    /// Firestore refuses an update time that is not a whole microsecond.
+    /// Firestore refuses a collection id that starts and ends with `__`, which firestore-rs
+    /// lets through.
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let misaligned =
-            FirestoreTimestamp(jiff::Timestamp::new(jiff::Timestamp::now().as_second(), 1)?);
-        super::a_store_error_carries_no_record_bytes(store().await?, Some(&misaligned)).await
+        let failing = store()
+            .await?
+            .with_collection(FirestoreCollectionId::from_static(
+                "__kms_aead_rs_refused__",
+            ));
+        super::a_store_error_carries_no_record_bytes(failing).await
     }
 
     /// The watches of a store and its clones share one listener, so a watch per keyring starts
@@ -445,10 +496,12 @@ mod firestore_store {
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn many_keyrings_share_one_listener() -> TestResult {
         let store = store().await?;
-        let mut watches = vec![store
-            .watch(&unique_keyring_id()?)
-            .await?
-            .ok_or("the store has no push")?];
+        let mut watches = vec![
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+        ];
         let runtime = tokio::runtime::Handle::current().metrics();
         let first = runtime.num_alive_tasks();
         for _ in 0..20 {
@@ -654,13 +707,13 @@ mod postgres {
     use std::error::Error;
     use std::time::{Duration, Instant};
 
+    use kms_aead_keyring::KeyringError;
     use kms_aead_keyring::store::{
         KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresTable, WatchEvent,
     };
-    use kms_aead_keyring::KeyringError;
     use tokio_postgres::{Client, Config, NoTls};
 
-    use super::{conformance, record, unique_keyring_id, written_revision, TestResult};
+    use super::{TestResult, conformance, record, unique_keyring_id, written_revision};
 
     fn config() -> Result<Config, Box<dyn Error>> {
         Ok(std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?.parse()?)
@@ -765,7 +818,7 @@ mod postgres {
             ))
             .await?;
         let failing = PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone());
-        super::a_store_error_carries_no_record_bytes(failing, None).await?;
+        super::a_store_error_carries_no_record_bytes(failing).await?;
         drop_table(&admin, &table).await?;
         admin
             .batch_execute(&format!("DROP FUNCTION {table}_refuse"))
@@ -1012,8 +1065,8 @@ mod postgres {
     /// The keyring over the PostgreSQL store, which the administrative API creates.
     #[cfg(all(feature = "ring", feature = "admin"))]
     mod keyring {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::{Duration, Instant};
 
         use kms_aead::backends::Ring;
@@ -1030,7 +1083,7 @@ mod postgres {
         use tokio_postgres::NoTls;
 
         use super::{config, connect, create_table, drop_table};
-        use crate::{unique_keyring_id, TestResult};
+        use crate::{TestResult, unique_keyring_id};
 
         /// A store that counts the revalidations a keyring asks of it.
         struct CountingStore {
@@ -1151,14 +1204,14 @@ mod postgres {
 mod gcs {
     use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
     use gcloud_sdk::google::storage::v2::{
-        write_object_request, ChecksummedData, Object, WriteObjectRequest, WriteObjectSpec,
+        ChecksummedData, Object, WriteObjectRequest, WriteObjectSpec, write_object_request,
     };
-    use gcloud_sdk::{tonic, GoogleApi};
+    use gcloud_sdk::{GoogleApi, tonic};
+    use kms_aead_keyring::KeyringError;
     use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
     use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore, KeyringStore, ObjectPrefix};
-    use kms_aead_keyring::KeyringError;
 
-    use super::{conformance, unique_keyring_id, TestResult};
+    use super::{TestResult, conformance, unique_keyring_id};
 
     async fn store() -> Result<GcsKeyringStore, Box<dyn std::error::Error>> {
         let bucket = GcsBucketName::try_from(std::env::var("KEYRING_GCS_BUCKET")?)?;
@@ -1273,7 +1326,7 @@ mod gcs {
         let failing = store()
             .await?
             .with_prefix(ObjectPrefix::from("x".repeat(1100)));
-        super::a_store_error_carries_no_record_bytes(failing, None).await
+        super::a_store_error_carries_no_record_bytes(failing).await
     }
 
     /// An object past the 1 MiB record cap loads as too large, whatever it holds.
@@ -1332,11 +1385,11 @@ mod gcs {
 mod s3 {
     use aws_config::{BehaviorVersion, Region};
     use aws_sdk_s3::primitives::ByteStream;
+    use kms_aead_keyring::KeyringError;
     use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
     use kms_aead_keyring::store::{KeyringStore, ObjectPrefix, S3BucketName, S3KeyringStore};
-    use kms_aead_keyring::KeyringError;
 
-    use super::{conformance, unique_keyring_id, TestResult};
+    use super::{TestResult, conformance, unique_keyring_id};
 
     /// The client of the server `KEYRING_S3_ENDPOINT` names. Without the variable it fails,
     /// rather than sending the tests to AWS.
@@ -1519,7 +1572,7 @@ mod s3 {
         let failing = store()
             .await?
             .with_prefix(ObjectPrefix::from("x".repeat(1100)));
-        super::a_store_error_carries_no_record_bytes(failing, None).await
+        super::a_store_error_carries_no_record_bytes(failing).await
     }
 
     /// An object past the 1 MiB record cap loads as too large, whatever it holds.

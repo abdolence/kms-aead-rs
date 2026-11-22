@@ -213,11 +213,20 @@ pub(crate) async fn join_tasks_until(tasks: &mut JoinSet<()>, deadline: Option<I
 
 /// A record and the revision it was read or written at.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Stored<R> {
     /// The record.
     pub record: KeyringRecord,
     /// Its revision in the store.
     pub revision: R,
+}
+
+impl<R> Stored<R> {
+    /// `record` at `revision`, as a store's [`load`](KeyringStore::load) or
+    /// [`revalidate`](KeyringStore::revalidate) returns it.
+    pub fn new(record: KeyringRecord, revision: R) -> Self {
+        Self { record, revision }
+    }
 }
 
 /// What [`KeyringStore::revalidate`] found.

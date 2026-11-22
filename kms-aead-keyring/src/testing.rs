@@ -63,6 +63,21 @@ impl MemoryKeyringStore {
     }
 }
 
+#[cfg(all(test, feature = "admin"))]
+impl MemoryKeyringStore {
+    /// Stores `json` as the document of `id` at a new revision, as a writer of another release
+    /// would, without parsing it: the next read checks it.
+    pub(crate) fn write_document(&self, id: &KeyringId, json: Vec<u8>) {
+        let mut state = self.lock();
+        state.writes += 1;
+        let revision = MemoryRevision(state.writes);
+        state
+            .documents
+            .insert(id.clone(), MemoryDocument { json, revision });
+        state.signal(id);
+    }
+}
+
 impl MemoryState {
     /// Signals every live watch of `id` that its record changed, and forgets the dropped ones.
     fn signal(&mut self, id: &KeyringId) {
@@ -80,10 +95,10 @@ impl MemoryState {
 
 impl MemoryDocument {
     fn stored(&self, id: &KeyringId) -> KeyringResult<Stored<MemoryRevision>> {
-        Ok(Stored {
-            record: KeyringRecord::from_json(id, &self.json)?,
-            revision: self.revision,
-        })
+        Ok(Stored::new(
+            KeyringRecord::from_json(id, &self.json)?,
+            self.revision,
+        ))
     }
 }
 

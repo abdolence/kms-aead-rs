@@ -5,7 +5,7 @@ use secret_vault_value::SecretValue;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::redaction::{JsonRedaction, RedactedJson, ShapeOnly};
-use crate::{spans, KmsAeadResult, SignedPayloadType};
+use crate::{KmsAeadResult, SignedPayloadType, spans};
 
 /// A type an [`Encrypted`](crate::Encrypted) value decrypts to, and the bytes it is encrypted as.
 ///
@@ -422,7 +422,7 @@ mod tests {
         let events = EventCapture::install();
         let payload = br#"{"id":"not-a-number","customer":"Northwind Traders"}"#;
 
-        let result = <JsonEncoded<Order, OrderLog> as Signable>::from_payload(payload.to_vec());
+        let result = <JsonEncoded<Order, OrderLog> as Signable>::from_payload(payload);
 
         let error = result.map(drop).expect_err("the id is not a number");
         assert_eq!(error.code(), "INVALID_PAYLOAD");

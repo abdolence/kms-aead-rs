@@ -61,7 +61,9 @@ this crate's API under the Firestore features.
 ### Storage layout
 
 The record of a keyring is the document `kms_keyrings/<keyring id>`, whose fields are those of the
-record's JSON. `with_collection` takes another collection than
+record's JSON. A `null` member is a field of Firestore's null type, so that the document reads back
+with the canonical digest that the record's signature covers. `with_collection` takes another
+collection than
 `FirestoreKeyringStore::DEFAULT_COLLECTION`, as firestore-rs's `FirestoreCollectionId`. A create fails when the document exists, and an
 update carries the update time it read as its precondition.
 
@@ -410,6 +412,14 @@ A delete needs rights a write does not: the administration's permissions per sto
   - a store with push signals the deletion as a change;
 - read a stored document with `KeyringRecord::from_json` and write one with
   `KeyringRecord::to_json`, so the document is the one every store keeps and every read checks it;
+- keep every member of the document as written, `null` ones included. A record's signature covers
+  its canonical digest, and a store that maps the document into fields of its own can drop a
+  `null` member, as firestore-rs does with a JSON `null`, which makes every signed record it holds
+  fail with `RecordSignatureInvalid`. The conformance check
+  `a_loaded_record_keeps_the_written_digest` holds every store to it, on a create and on an
+  update;
+- build the `Stored` that `load` and `revalidate` return with `Stored::new(record, revision)`,
+  since the struct is `#[non_exhaustive]`;
 - return the client's errors as `KeyringError::Store`, with the client's error as the root cause.
   Never format the record or the request into an error and never log either, since both carry
   encrypted DEKs.

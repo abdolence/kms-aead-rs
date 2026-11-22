@@ -1,12 +1,14 @@
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ::firestore::errors::FirestoreError;
 use ::firestore::gcloud_sdk::google::firestore::v1::Document;
 use ::firestore::{
-    FirestoreCollectionId, FirestoreDb, FirestoreTimestamp, FirestoreWritePrecondition,
+    FirestoreCollectionId, FirestoreDb, FirestoreTimestamp, FirestoreValue,
+    FirestoreWritePrecondition, firestore_document_from_serializable, serialize_as_null,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
 use self::listener::Watches;
@@ -30,10 +32,10 @@ mod listener;
 /// last clone, which ends every watch. [`with_collection`](Self::with_collection) starts a
 /// listener of its own.
 ///
-/// [`FirestoreDb`] and [`FirestoreTimestamp`] are firestore-rs's own types, a deliberate
+/// [`FirestoreDb`] and [`FirestoreCollectionId`] are firestore-rs's own types, a deliberate
 /// integration point: the application builds the client, with the project, the database and the
-/// credentials it chooses, and the store's revision is Firestore's timestamp. firestore-rs's
-/// version is part of this crate's API under the `firestore` feature.
+/// credentials it chooses. firestore-rs's version is part of this crate's API under the
+/// `firestore` feature.
 ///
 /// The store's reads and writes use the client's
 /// [`request_timeout`](::firestore::FirestoreDbOptions::request_timeout), if the application sets
@@ -49,11 +51,36 @@ pub struct FirestoreKeyringStore {
     watches: Arc<Watches>,
 }
 
-/// The update time of a document Firestore returns from a write.
-#[derive(Deserialize)]
-struct WrittenDocument {
-    #[serde(rename = "_firestore_updated")]
-    update_time: FirestoreTimestamp,
+/// The revision of a record in a [`FirestoreKeyringStore`]: the update time of its document,
+/// which Firestore changes on every write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirestoreRevision(FirestoreTimestamp);
+
+impl Display for FirestoreRevision {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A record's JSON document for firestore-rs's serializer, each `null` in it a Firestore null.
+/// firestore-rs writes a JSON `null` as a value of no type, which it leaves out of the document,
+/// and a record read back without its `null` members has another canonical digest than the one
+/// its signature covers.
+struct FieldsWithNulls<'a>(&'a Value);
+
+impl Serialize for FieldsWithNulls<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Null => serialize_as_null::serialize(&None::<()>, serializer),
+            Value::Array(items) => serializer.collect_seq(items.iter().map(FieldsWithNulls)),
+            Value::Object(members) => serializer.collect_map(
+                members
+                    .iter()
+                    .map(|(name, member)| (name, FieldsWithNulls(member))),
+            ),
+            scalar => scalar.serialize(serializer),
+        }
+    }
 }
 
 impl FirestoreKeyringStore {
@@ -103,11 +130,11 @@ impl FirestoreKeyringStore {
 }
 
 impl KeyringStore for FirestoreKeyringStore {
-    type Revision = FirestoreTimestamp;
+    type Revision = FirestoreRevision;
 
     const KIND: StoreKind = StoreKind::Firestore;
 
-    async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<FirestoreTimestamp>>> {
+    async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<FirestoreRevision>>> {
         self.document(id, StoreOperation::Load)
             .await?
             .map(|document| stored_record_from_document(id, &document, StoreOperation::Load))
@@ -119,8 +146,8 @@ impl KeyringStore for FirestoreKeyringStore {
     async fn revalidate(
         &self,
         id: &KeyringId,
-        known: &FirestoreTimestamp,
-    ) -> KeyringResult<Revalidation<FirestoreTimestamp>> {
+        known: &FirestoreRevision,
+    ) -> KeyringResult<Revalidation<FirestoreRevision>> {
         let operation = StoreOperation::Revalidate;
         match self.document(id, operation).await? {
             None => Ok(Revalidation::Missing),
@@ -136,10 +163,13 @@ impl KeyringStore for FirestoreKeyringStore {
     async fn compare_and_swap(
         &self,
         record: &KeyringRecord,
-        expected: Option<&FirestoreTimestamp>,
-    ) -> KeyringResult<Swap<FirestoreTimestamp>> {
+        expected: Option<&FirestoreRevision>,
+    ) -> KeyringResult<Swap<FirestoreRevision>> {
         let id = record.id();
+        let operation = StoreOperation::CompareAndSwap;
         let fields: Value = serde_json::from_slice(&record.to_json()?)
+            .map_err(|_| KeyringError::malformed(id, None))?;
+        let document = firestore_document_from_serializable("", &FieldsWithNulls(&fields))
             .map_err(|_| KeyringError::malformed(id, None))?;
         let written = match expected {
             None => {
@@ -148,28 +178,41 @@ impl KeyringStore for FirestoreKeyringStore {
                     .insert()
                     .into(self.collection.as_str())
                     .document_id(id.as_str())
-                    .object(&fields)
-                    .execute::<WrittenDocument>()
+                    .document(document)
+                    .execute()
                     .await
             }
             Some(revision) => {
+                // An update names its document by the full path, which a create leaves empty.
+                let document_path = self
+                    .db
+                    .parent_path(self.collection.as_str(), id.as_str())
+                    .map_err(|error| {
+                        KeyringError::store_caused_by(
+                            FirestoreKeyringStore::KIND,
+                            operation,
+                            Arc::new(error),
+                        )
+                    })?;
                 self.db
                     .fluent()
                     .update()
                     .in_col(self.collection.as_str())
-                    .precondition(FirestoreWritePrecondition::UpdateTime((*revision).into()))
-                    .document_id(id.as_str())
-                    .object(&fields)
-                    .execute::<WrittenDocument>()
+                    .precondition(FirestoreWritePrecondition::UpdateTime(revision.0.into()))
+                    .document(Document {
+                        name: document_path.to_string(),
+                        ..document
+                    })
+                    .execute()
                     .await
             }
         };
         match written {
-            Ok(document) => Ok(Swap::Written(document.update_time)),
+            Ok(document) => revision_of_document(&document, operation).map(Swap::Written),
             Err(error) if is_precondition_refusal(&error) => Ok(Swap::Conflict),
             Err(error) => Err(KeyringError::store_caused_by(
                 FirestoreKeyringStore::KIND,
-                StoreOperation::CompareAndSwap,
+                operation,
                 Arc::new(error),
             )),
         }
@@ -185,14 +228,14 @@ impl KeyringStore for FirestoreKeyringStore {
     async fn delete(
         &self,
         id: &KeyringId,
-        expected: &FirestoreTimestamp,
+        expected: &FirestoreRevision,
     ) -> KeyringResult<Deletion> {
         let deleted = self
             .db
             .fluent()
             .delete()
             .from(self.collection.as_str())
-            .precondition(FirestoreWritePrecondition::UpdateTime((*expected).into()))
+            .precondition(FirestoreWritePrecondition::UpdateTime(expected.0.into()))
             .document_id(id.as_str())
             .execute()
             .await;
@@ -250,20 +293,27 @@ fn stored_record_from_document(
     id: &KeyringId,
     document: &Document,
     operation: StoreOperation,
-) -> KeyringResult<Stored<FirestoreTimestamp>> {
-    let fields: Value =
-        FirestoreDb::deserialize_doc_to(document).map_err(|_| KeyringError::malformed(id, None))?;
+) -> KeyringResult<Stored<FirestoreRevision>> {
+    // The document's own fields only: `FirestoreDb::deserialize_doc_to` adds its name and times,
+    // which are no members of the record and would change its canonical digest.
+    let fields = Value::deserialize(FirestoreValue::from_map(
+        document
+            .fields
+            .iter()
+            .map(|(name, value)| (name, FirestoreValue::from(value.clone()))),
+    ))
+    .map_err(|_| KeyringError::malformed(id, None))?;
     let json = serde_json::to_vec(&fields).map_err(|_| KeyringError::malformed(id, None))?;
-    Ok(Stored {
-        record: KeyringRecord::from_json(id, &json)?,
-        revision: revision_of_document(document, operation)?,
-    })
+    Ok(Stored::new(
+        KeyringRecord::from_json(id, &json)?,
+        revision_of_document(document, operation)?,
+    ))
 }
 
 fn revision_of_document(
     document: &Document,
     operation: StoreOperation,
-) -> KeyringResult<FirestoreTimestamp> {
+) -> KeyringResult<FirestoreRevision> {
     let update_time = document.update_time.ok_or_else(|| {
         KeyringError::store(
             FirestoreKeyringStore::KIND,
@@ -271,9 +321,11 @@ fn revision_of_document(
             "Firestore returned a document without an update time",
         )
     })?;
-    FirestoreTimestamp::try_from(update_time).map_err(|error| {
-        KeyringError::store_caused_by(FirestoreKeyringStore::KIND, operation, Arc::new(error))
-    })
+    FirestoreTimestamp::try_from(update_time)
+        .map(FirestoreRevision)
+        .map_err(|error| {
+            KeyringError::store_caused_by(FirestoreKeyringStore::KIND, operation, Arc::new(error))
+        })
 }
 
 /// Whether Firestore refused a write for its precondition: the document exists on a create, or

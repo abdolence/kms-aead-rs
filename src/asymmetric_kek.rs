@@ -100,7 +100,7 @@ impl AsymmetricKekPublicKey {
             PublicKeyFormat::Raw => {
                 return Err(KmsAeadSystemError::asymmetric_public_key(
                     "An RSA public key has no raw form: give it as SpkiDer, SpkiPem or Jwk",
-                ))
+                ));
             }
         };
         let key = Self {
@@ -487,7 +487,7 @@ impl TryFrom<String> for AsymmetricKekFingerprint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_provider::{assert_code, RsaOaepSuite};
+    use crate::test_provider::{RsaOaepSuite, assert_code};
 
     const CRYPTO_KEY: &str = "projects/orders/locations/europe-north1/keyRings/r/cryptoKeys/k";
 

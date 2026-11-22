@@ -8,25 +8,25 @@ use base64ct::{Base64, Encoding};
 use go_duration::GoDuration;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
-use hyper::header::{HeaderName, HeaderValue, CONTENT_TYPE};
+use hyper::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use hyper::{Method, Request, StatusCode, Uri};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use rsb_derive::Builder;
-use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
-use super::kms_key_version::read_kek_version;
 use super::KmsKeyVersion;
+use super::kms_key_version::read_kek_version;
 use crate::errors::*;
-use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::formats::PublicKeyFormat;
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::spans::{self, kms};
 use crate::*;
 
@@ -85,6 +85,7 @@ impl HcVaultTransitToken {
 
 /// A key of the HashiCorp Vault Transit secrets engine.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct HcVaultTransitKeyRef {
     /// The name of the Transit key.
     pub key_name: String,
@@ -862,9 +863,9 @@ fn trusted_roots(
 mod tests {
     use super::*;
     use crate::formats::Envelope;
-    use crate::test_http::{answer_with, ReceivedRequest};
+    use crate::test_http::{ReceivedRequest, answer_with};
     use crate::test_provider::{
-        public_key_encrypted_dek, RsaOaepSuite, TestBackend, ENCRYPTED_BLOCK,
+        ENCRYPTED_BLOCK, RsaOaepSuite, TestBackend, public_key_encrypted_dek,
     };
     use std::sync::Mutex;
     use tokio::net::TcpListener;
@@ -981,8 +982,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_decryption_sends_the_block_as_the_ciphertext_of_the_version(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_decryption_sends_the_block_as_the_ciphertext_of_the_version()
+    -> KmsAeadResult<()> {
         let (provider, requests) = provider_recording(format!(
             r#"{{"data":{{"plaintext":"{}"}}}}"#,
             data_key().value().as_sensitive_base64_str().as_str()
@@ -1015,8 +1016,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_header_that_names_a_kek_id_or_no_version_is_refused_before_any_request(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_header_that_names_a_kek_id_or_no_version_is_refused_before_any_request()
+    -> KmsAeadResult<()> {
         for (kek_id, kek_version) in [(&b"orders"[..], Some("2")), (b"", None)] {
             let (provider, requests) = provider_recording("{}".to_string()).await;
 

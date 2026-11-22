@@ -229,6 +229,7 @@ impl FromStr for KeyAlgorithm {
 /// `create`, and the replacement `mark_compromised` makes for an active version, are `Active` at
 /// once. Every state right of `Active` may also be compromised; `Pending` and `Active` never are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyVersionState {
     /// Staged by a rotation: decrypts, and never encrypts until it is promoted. At most one per
     /// purpose.
@@ -560,6 +561,10 @@ pub struct KeyringRecord {
     /// left out. A record a write is changing keeps the digest of the document it was read from
     /// until `RecordEdit::finish` parses the changed one.
     canonical_digest: [u8; 32],
+    /// Whether the document the record was parsed from holds a member that the document of
+    /// [`to_json`](Self::to_json) leaves out, so that writing the record back would drop it.
+    #[cfg(feature = "admin")]
+    unknown_members: bool,
 }
 
 /// A record is signed and verified through its canonical digest, never through payload bytes it
@@ -717,6 +722,26 @@ impl KeyringRecord {
         }
     }
 
+    /// Refuses an administrative write over this record when the document it was parsed from
+    /// holds members this release does not know: the record the write builds holds only the
+    /// members of [`to_json`](Self::to_json), so the others would be lost, and a signing write
+    /// would sign what is left.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::RecordInvalid`] with `UnknownMembers`.
+    #[cfg(feature = "admin")]
+    pub(crate) fn check_writable(&self) -> KeyringResult<()> {
+        if self.unknown_members {
+            Err(KeyringError::record_invalid(
+                &self.id,
+                crate::errors::RecordInvalidReason::UnknownMembers,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     /// The record as a process holds it once the store holds none: every version destroyed, as
     /// `dangerously_destroy_all_versions` leaves them. It keeps the signature, so that it still
     /// says that the keyring was signed, though the signature no longer covers the record, and
@@ -853,7 +878,7 @@ impl KeyVersion {
         match (self.compromised(), version.compromised()) {
             (Some(_), None) => return Err(RegressionRule::CompromiseCleared(key_id)),
             (Some(held), Some(compromise)) if held.at != compromise.at => {
-                return Err(RegressionRule::CompromiseAltered(key_id))
+                return Err(RegressionRule::CompromiseAltered(key_id));
             }
             _ => {}
         }

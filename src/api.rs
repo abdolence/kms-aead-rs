@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,9 @@ use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 ///
 /// Write each method that returns a future as an `async fn`. Its future must be `Send`, so that
 /// an envelope or a keyring runs on a multi-threaded runtime. Envelopes and keyrings are generic
-/// over their provider: the trait has no `dyn` form.
+/// over their provider: the trait has no `dyn` form. `Arc<P>` and `&P` implement it for every `P`
+/// that does, so that one provider serves many envelopes or keyrings, whether `P` is `Clone` or
+/// not.
 ///
 /// An implementation's errors carry no key material in any form, plaintext or encrypted, in
 /// `Display` or `Debug`. A provider that calls a KMS hands the plaintext key to the KMS SDK or
@@ -89,6 +92,76 @@ pub trait KmsAeadDecryptionProvider: KmsAeadEncryptionProvider {
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> impl Future<Output = KmsAeadResult<DataEncryptionKey>> + Send;
+}
+
+/// Forwards every method to `P`, the defaulted ones included, so that a provider shared behind an
+/// `Arc`, such as one KEK's provider under many keyrings, behaves as `P` does.
+impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for Arc<P> {
+    fn kek(&self) -> &KekRef {
+        (**self).kek()
+    }
+
+    fn encrypt_data_encryption_key(
+        &self,
+        dek: &DataEncryptionKey,
+    ) -> impl Future<Output = KmsAeadResult<EncryptedDataEncryptionKey>> + Send {
+        (**self).encrypt_data_encryption_key(dek)
+    }
+
+    fn generate_key_material(
+        &self,
+        len: usize,
+    ) -> impl Future<Output = KmsAeadResult<Option<SecretValue>>> + Send {
+        (**self).generate_key_material(len)
+    }
+
+    fn encrypts_with_public_key(&self) -> bool {
+        (**self).encrypts_with_public_key()
+    }
+}
+
+impl<P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider for Arc<P> {
+    fn decrypt_data_encryption_key(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> impl Future<Output = KmsAeadResult<DataEncryptionKey>> + Send {
+        (**self).decrypt_data_encryption_key(encrypted_dek)
+    }
+}
+
+/// Forwards every method to `P`, the defaulted ones included, so that a borrowed provider behaves
+/// as `P` does.
+impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for &P {
+    fn kek(&self) -> &KekRef {
+        (**self).kek()
+    }
+
+    fn encrypt_data_encryption_key(
+        &self,
+        dek: &DataEncryptionKey,
+    ) -> impl Future<Output = KmsAeadResult<EncryptedDataEncryptionKey>> + Send {
+        (**self).encrypt_data_encryption_key(dek)
+    }
+
+    fn generate_key_material(
+        &self,
+        len: usize,
+    ) -> impl Future<Output = KmsAeadResult<Option<SecretValue>>> + Send {
+        (**self).generate_key_material(len)
+    }
+
+    fn encrypts_with_public_key(&self) -> bool {
+        (**self).encrypts_with_public_key()
+    }
+}
+
+impl<P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider for &P {
+    fn decrypt_data_encryption_key(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> impl Future<Output = KmsAeadResult<DataEncryptionKey>> + Send {
+        (**self).decrypt_data_encryption_key(encrypted_dek)
+    }
 }
 
 /// A key encryption key: the KMS that holds it and the key's name there. It is also the
@@ -213,6 +286,33 @@ impl FromStr for KmsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
+    mod shared_providers {
+        use std::sync::Arc;
+
+        use secret_vault_value::SecretValue;
+
+        use crate::test_provider::{TestBackend, TestKmsProvider};
+        use crate::{DataEncryptionKey, KmsAeadEnvelope, KmsAeadResult};
+
+        #[tokio::test]
+        async fn a_shared_provider_keeps_its_kms_generator() -> KmsAeadResult<()> {
+            let key_material = SecretValue::new(vec![0x42; 32]);
+            let provider = TestKmsProvider::Generating(key_material.clone());
+
+            let (from_arc, _) = KmsAeadEnvelope::<_, TestBackend>::new(Arc::new(provider.clone()))?
+                .generate_encrypted_dek()
+                .await?;
+            let (from_reference, _) = KmsAeadEnvelope::<_, TestBackend>::new(&provider)?
+                .generate_encrypted_dek()
+                .await?;
+
+            assert_eq!(from_arc, DataEncryptionKey::from(key_material.clone()));
+            assert_eq!(from_reference, DataEncryptionKey::from(key_material));
+            Ok(())
+        }
+    }
 
     #[test]
     fn every_name_parses_back_and_another_name_is_other() {

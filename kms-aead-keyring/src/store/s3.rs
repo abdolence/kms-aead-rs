@@ -268,21 +268,21 @@ impl S3KeyringStore {
                     .as_service_error()
                     .is_some_and(GetObjectError::is_no_such_key) =>
             {
-                return Ok(Revalidation::Missing)
+                return Ok(Revalidation::Missing);
             }
             Err(error)
                 if error
                     .raw_response()
                     .is_some_and(|response| response.status().as_u16() == 304) =>
             {
-                return Ok(Revalidation::Unchanged)
+                return Ok(Revalidation::Unchanged);
             }
             Err(error) => {
                 return Err(KeyringError::store_caused_by(
                     StoreKind::S3,
                     operation,
                     Arc::new(error),
-                ))
+                ));
             }
         };
         let revision = S3ETag(response.e_tag.ok_or_else(|| {
@@ -301,14 +301,14 @@ impl S3KeyringStore {
                         StoreKind::S3,
                         operation,
                         Arc::new(error),
-                    ))
+                    ));
                 }
             }
         }
-        Ok(Revalidation::Changed(Stored {
-            record: KeyringRecord::from_json(id, &document)?,
+        Ok(Revalidation::Changed(Stored::new(
+            KeyringRecord::from_json(id, &document)?,
             revision,
-        }))
+        )))
     }
 }
 
@@ -364,14 +364,14 @@ impl KeyringStore for S3KeyringStore {
                     Some("PreconditionFailed" | "ConditionalRequestConflict" | "NoSuchKey")
                 ) =>
             {
-                return Ok(Swap::Conflict)
+                return Ok(Swap::Conflict);
             }
             Err(error) => {
                 return Err(KeyringError::store_caused_by(
                     StoreKind::S3,
                     StoreOperation::CompareAndSwap,
                     Arc::new(error),
-                ))
+                ));
             }
         };
         match response.e_tag {
@@ -426,7 +426,7 @@ impl KeyringStore for S3KeyringStore {
             Ok(response) if response.version_id().is_none() => return Ok(Deletion::Deleted),
             Ok(response) => response.version_id().map(str::to_string),
             Err(error) if error.code() == Some("PreconditionFailed") => {
-                return Ok(Deletion::Conflict)
+                return Ok(Deletion::Conflict);
             }
             Err(error) if error.code() == Some("NoSuchKey") => None,
             Err(error) => {
@@ -434,7 +434,7 @@ impl KeyringStore for S3KeyringStore {
                     StoreKind::S3,
                     StoreOperation::Delete,
                     Arc::new(error),
-                ))
+                ));
             }
         };
         // A bucket with versioning answered the delete with a marker and kept the version. The

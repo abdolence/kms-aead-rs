@@ -8,8 +8,8 @@ use std::fmt::{Debug, Display, Formatter};
 use kms_aead::formats::TinkKeyType;
 use kms_aead::{AeadAlgorithm, BeaconBits, DeterministicAlgorithm, KekRef, KmsProvider};
 
-use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::KeyAlgorithm;
+use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 
 /// The bytes an AAD part may hold: 1 to 255 bytes of UTF-8 without `/`, which separates the
 /// parts, and without NUL or another ASCII control character. A loop, since slice methods are

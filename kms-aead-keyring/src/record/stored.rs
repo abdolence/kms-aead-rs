@@ -4,8 +4,8 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use jiff::Timestamp;
 use kms_aead::providers::KmsKeyVersion;
 use kms_aead::signing::Signature;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::canonical::{canonical_json, CanonicalError};
+use super::canonical::{CanonicalError, canonical_json};
 use super::{
     Compromise, KeyAlgorithm, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
     KeyringRecord, RetainedDek, VersionState,
@@ -173,7 +173,9 @@ impl KeyringRecord {
     /// Parses the JSON document a store holds for the keyring `id`, and checks it: at most
     /// 1 MiB, the record of `id`, and every invariant of [`KeyringRecord`]. It verifies nothing:
     /// it keeps the record's signature and the SHA-256 of its canonical document, which the
-    /// registry verifies before it uses the record. Every store calls it.
+    /// registry verifies before it uses the record. A member this release does not know is read
+    /// past and kept in that digest, and an administrative write refuses the record, see
+    /// [`RecordInvalidReason::UnknownMembers`]. Every store calls it.
     ///
     /// # Errors
     ///
@@ -205,7 +207,11 @@ impl KeyringRecord {
         };
         let canonical_digest =
             canonical_digest(&parsed).map_err(|_| KeyringError::malformed(id, None))?;
-        let stored: StoredRecord = serde_json::from_value(parsed)
+        let stored = StoredRecord::deserialize(&parsed)
+            .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
+        #[cfg(feature = "admin")]
+        let unknown_members = serde_json::to_value(&stored)
+            .map(|known| holds_unknown_members(&parsed, &known))
             .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
         if stored.schema != RECORD_SCHEMA_VERSION {
             return Err(invalid(RecordInvalidReason::UnsupportedSchema(
@@ -273,6 +279,8 @@ impl KeyringRecord {
             updated_at: stored.updated_at,
             signature,
             canonical_digest,
+            #[cfg(feature = "admin")]
+            unknown_members,
         };
         record.check_versions().map_err(invalid)?;
         Ok(record)
@@ -307,10 +315,10 @@ impl KeyringRecord {
                 return Err(RecordInvalidReason::OrdinalOrder(key_id));
             }
             *last = Some(key_id);
-            if let Some(encrypted_dek) = version.encrypted_dek() {
-                if !seen_deks.insert(encrypted_dek.value()) {
-                    return Err(RecordInvalidReason::DuplicateEncryptedDek(key_id));
-                }
+            if let Some(encrypted_dek) = version.encrypted_dek()
+                && !seen_deks.insert(encrypted_dek.value())
+            {
+                return Err(RecordInvalidReason::DuplicateEncryptedDek(key_id));
             }
         }
         for purpose in Purpose::ALL {
@@ -336,6 +344,26 @@ impl KeyringRecord {
 /// The SHA-256 of RFC 8785's canonical form of `document`.
 fn canonical_digest(document: &Value) -> Result<[u8; 32], CanonicalError> {
     canonical_json(document).map(|canonical| Sha256::digest(canonical).into())
+}
+
+/// Whether `document` holds a member, at any depth, that `known` lacks: `known` is the document
+/// this release writes for the same values, which holds every member it knows, `null` ones
+/// included, so a member that a document of an earlier release lacks is no difference.
+#[cfg(feature = "admin")]
+fn holds_unknown_members(document: &Value, known: &Value) -> bool {
+    match document {
+        Value::Object(members) => members.iter().any(|(name, member)| {
+            known
+                .get(name)
+                .is_none_or(|known| holds_unknown_members(member, known))
+        }),
+        Value::Array(items) => items.iter().enumerate().any(|(index, item)| {
+            known
+                .get(index)
+                .is_none_or(|known| holds_unknown_members(item, known))
+        }),
+        _ => false,
+    }
 }
 
 impl TryFrom<StoredVersion> for KeyVersion {
@@ -379,7 +407,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
             }
             (encrypted_dek, None) => encrypted_dek,
             (None, Some(_)) if kind == KeyVersionState::Destroyed => {
-                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
+                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id));
             }
             (None, Some(_)) => return Err(RecordInvalidReason::MissingMaterial(key_id)),
         };
@@ -398,11 +426,11 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 reencrypt_range,
             },
             (KeyVersionState::Destroyed, Some(_)) => {
-                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
+                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id));
             }
             (_, None) => return Err(RecordInvalidReason::MissingMaterial(key_id)),
             (KeyVersionState::Active, Some(_)) if compromised.is_some() => {
-                return Err(RecordInvalidReason::CompromisedActive(key_id))
+                return Err(RecordInvalidReason::CompromisedActive(key_id));
             }
             (KeyVersionState::Active, Some(encrypted_dek)) => match reencrypt_range {
                 Some(range) if range.end().is_none() => VersionState::Active {
@@ -412,7 +440,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 _ => return Err(RecordInvalidReason::ReencryptRangeInvalid(key_id)),
             },
             (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
-                return Err(RecordInvalidReason::CompromisedPending(key_id))
+                return Err(RecordInvalidReason::CompromisedPending(key_id));
             }
             (KeyVersionState::Pending, Some(encrypted_dek)) => match reencrypt_range {
                 None => VersionState::Pending(encrypted_dek),

@@ -94,20 +94,19 @@ pub use aes_siv_cipher::*;
 mod aes_siv_cipher {
     use std::marker::PhantomData;
 
-    use aes_siv::siv::Aes256Siv;
     use aes_siv::KeyInit;
+    use aes_siv::siv::Aes256Siv;
     use secret_vault_value::SecretValue;
 
     use super::DeterministicAlgorithm;
     use crate::backends::AeadBackend;
     use crate::errors::KmsAeadEncryptionError;
-    use crate::formats::{tink_output_prefix, Deterministic, TINK_OUTPUT_PREFIX_LEN};
+    use crate::formats::{Deterministic, TINK_OUTPUT_PREFIX_LEN, tink_output_prefix};
     use crate::metrics::{self, Measurement};
     use crate::types::checked_key_bytes;
     use crate::{
-        spans, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-        KmsAeadDecryptionProvider, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
-        Plaintext,
+        DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadDecryptionProvider,
+        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, Plaintext, spans,
     };
 
     /// Deterministic AEAD on the backend `B` and with the algorithm it was made with, without a
@@ -331,8 +330,8 @@ mod aes_siv_cipher {
         fn deterministic_call(
             operation: &'static str,
             algorithm: DeterministicAlgorithm,
-        ) -> metrics::Call {
-            metrics::Call {
+        ) -> metrics::OperationAttributes {
+            metrics::OperationAttributes {
                 operation,
                 mode: "caller_dek",
                 backend: B::NAME,
@@ -364,7 +363,7 @@ mod aes_siv_cipher {
                 Measurement::start(Self::deterministic_call("decrypt_dek", algorithm));
             let span = spans::decrypt_dek(algorithm, self.dek_cache());
             let decrypted = spans::in_span(span, async {
-                let (dek, _) = crate::formats::decrypt_dek(encrypted_dek, &self.provider).await?;
+                let dek = crate::formats::decrypt_dek(encrypted_dek, &self.provider).await?;
                 checked_key_bytes(
                     dek.value().ref_sensitive_value(),
                     algorithm,
@@ -523,7 +522,7 @@ mod aes_siv_cipher {
 
         mod envelope {
             use super::*;
-            use crate::test_provider::{encrypted_by_test_provider, TestKmsProvider};
+            use crate::test_provider::{TestKmsProvider, encrypted_by_test_provider};
 
             type Envelope = KmsAeadEnvelope<TestKmsProvider, TestBackend>;
 

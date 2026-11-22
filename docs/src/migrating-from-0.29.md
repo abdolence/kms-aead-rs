@@ -5,7 +5,7 @@ order, starting with [Migrating from 0.30](./migrating-from-0.30.md).
 
 0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse, the DEK
 cache, deterministic encryption and the local KMS, and makes ring optional. It writes the KMS
-envelope format of Tink, Google's open-source cryptography library, for every provider. Values written by 0.29 and earlier read only with the deprecated
+envelope format of Tink, Google's open-source cryptography library, for every provider. Values written by 0.29 and earlier read only in 0.30 to 0.33, with the deprecated
 `legacy-formats` feature, which also rewrites them in the new format, see [Old values](#old-values).
 
 Eight changes break a build against 0.29:
@@ -19,7 +19,7 @@ Eight changes break a build against 0.29:
 - [the errors](#errors) gain variants, change codes and lose the `From` conversions of SDK errors;
 - [AWS KMS decryption](#aws-kms-decryption-names-the-key) names the configured key;
 - [the default algorithm](#default-algorithm) is AES-256-GCM, not ChaCha20-Poly1305;
-- [values written by 0.29 and earlier](#old-values) read only with `legacy-formats`.
+- [values written by 0.29 and earlier](#old-values) read only with `legacy-formats`, up to 0.33.
 
 0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:
 
@@ -176,7 +176,7 @@ Error codes that changed:
 | `DECRYPT_KEY` | `RANDOM_GENERATOR` | the GCP KMS generator, when its request cannot be built |
 | `SYSTEM_TIME_ERROR` | removed | |
 | `UNKNOWN_ENCRYPTED_KEY_LAYOUT` | removed | stored encrypted DEKs are the provider's bytes |
-| `AZURE_KEY_VERSION_MISSING` | `AZURE_ENCRYPTED_DEK_FORMAT` | the Azure decryption of bytes outside its layout; the old code stays for a 0.29 value without a key version, with `legacy-formats` |
+| `AZURE_KEY_VERSION_MISSING` | `AZURE_ENCRYPTED_DEK_FORMAT` | the Azure decryption of bytes outside its layout; up to 0.33, the old code stays for a 0.29 value without a key version, with `legacy-formats` |
 | `AZURE_WRAP_ALGORITHM` | removed | `AzureKmsAlgorithm` has no variant for `Rsa1_5` or an unknown algorithm |
 
 The other 0.29 codes keep their spelling. The new codes are listed in
@@ -226,56 +226,59 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 
 0.30 writes Tink's KMS envelope, and encrypts every DEK but Azure's as a serialised Tink key. 0.29
 wrote envelope layout v1 and the encrypted DEK layout v1 `[0xFF][0x01]…`, and 0.28.1 and earlier a
-length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
-`legacy-formats` feature, and fails with `LEGACY_FORMAT` without it, see
+length-prefixed envelope, all with the raw DEK encrypted. 0.30 to 0.33 read them only with the
+deprecated `legacy-formats` feature, and fail with `LEGACY_FORMAT` without it. Later releases have
+no such feature and refuse them, see
 [Values written by 0.29 and earlier](#values-written-by-029-and-earlier).
 
+kms-aead 0.33 is the last release that reads them, so stored values move to the new format on it.
 The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
 [Default algorithm](#default-algorithm).
 
 To move stored values to the new format:
 
-1. upgrade every process that reads the values to 0.30 with `legacy-formats`. 0.29 and earlier
+1. upgrade every process that reads the values to 0.33 with `legacy-formats`. 0.29 and earlier
    cannot read Tink's format, so no process writes it before every reader has the upgrade;
 2. rewrite the stored values with `upgrade_legacy_value` and `upgrade_legacy_encrypted_dek` of
    `KmsAeadEnvelope`, one or two KMS calls per value, see
    [Upgrading stored values](#upgrading-stored-values). `upgrade_legacy_value` takes
    the value's AAD, and fails with `DECRYPT` on a value that does not decrypt under the envelope's
    algorithm and that AAD;
-3. turn the feature off.
+3. turn the feature off, and move to a later release.
 
-`Encrypted::<T, Envelope>::separate` reads Tink's format only, with or without the feature, so
-code that separated stored 0.29 values runs after the sweep.
+`Encrypted::<T, Envelope>::separate` reads Tink's format only, in every release, so code that
+separated stored 0.29 values runs after the sweep.
 
 ## Values written by 0.29 and earlier
 
-The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature:
+Releases after 0.33 never read the layouts of 0.29 and earlier. Reading one fails with
+`KmsAeadError::EncryptionError` and the code `LEGACY_FORMAT`:
+
+- `Encrypted::<T, Envelope>::try_from` refuses the envelope layout v1 and the length-prefixed
+  envelope;
+- a decryption, the DEK cache and the re-encryptions refuse the encrypted DEK layout v1 before the
+  KMS call, and an encrypted DEK that decrypts to the raw key after it. The values of 32-bit
+  targets before 0.24.0 fail this way, since their framing is Tink's.
+
+The error never echoes the bytes read. The `KMS AEAD decrypt` spans of such values record
+`error_code=LEGACY_FORMAT`, see [Observability](./observability/spans-and-events.md).
+
+In 0.30 to 0.33, `legacy-formats` reads them:
 
 - `KmsAeadEnvelope::decrypt` reads the three envelope layouts, which `Encrypted<T, Envelope>`
   holds with the feature;
 - the `*_with_encrypted_dek` calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
   raw encrypted DEKs.
 
-`Encrypted::separate` never reads the older envelope layouts: for Azure, the encrypted DEK they
-hold needs the provider to become its bytes.
-
-Without the feature, reading them fails with `KmsAeadError::LegacyFormat`, the code
-`LEGACY_FORMAT`, and one of:
-
-- `KmsAeadLegacyFormat::EnvelopeV1`;
-- `KmsAeadLegacyFormat::LengthPrefixedEnvelope`;
-- `KmsAeadLegacyFormat::EncryptedDekV1`;
-- `KmsAeadLegacyFormat::RawEncryptedDek`, for an encrypted DEK that decrypts to the raw key. The
-  values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink's.
-
-The error never echoes the bytes read. With the feature, the first read of each layout in a
-process logs one `WARN` event that names the upgrade methods. Without it, the `KMS AEAD decrypt`
-spans of such values record `error_code=LEGACY_FORMAT`, see [Observability](./observability/spans-and-events.md).
+Without the feature, those releases fail with `KmsAeadError::LegacyFormat`, the code
+`LEGACY_FORMAT`, and with the feature, the first read of each layout in a process logs one `WARN`
+event that names the upgrade methods.
 
 ## Upgrading stored values
 
-With `legacy-formats`, two methods of `KmsAeadEnvelope` rewrite a stored value in Tink's format,
-and return `None` when it already is in it, so a sweep writes only the rows that change:
+With `legacy-formats`, two methods of `KmsAeadEnvelope` in 0.30 to 0.33 rewrite a stored value in
+Tink's format, and return `None` when it already is in it, so a sweep writes only the rows that
+change:
 
 - `upgrade_legacy_value`, for envelope values;
 - `upgrade_legacy_encrypted_dek`, for encrypted DEKs stored apart, such as the bytes of 0.29's
@@ -301,9 +304,9 @@ envelope's algorithm for any key of its length. Be aware not to upgrade a DEK st
 another algorithm than its values were encrypted with: use `upgrade_legacy_value` wherever the
 values are at hand.
 
-A sweep over stored rows:
+A sweep over stored rows, on kms-aead 0.33 with `legacy-formats`:
 
-```rust
+```rust,ignore
 use kms_aead::backends::AeadBackend;
 use kms_aead::formats::Envelope;
 use kms_aead::{Encrypted, KmsAeadDecryptionProvider, KmsAeadEnvelope, KmsAeadResult};
@@ -335,39 +338,12 @@ where
     }
     Ok(upgraded)
 }
-# use kms_aead::backends::Ring;
-# use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider, KmsAeadEnvelopeOptions};
-# #[tokio::main(flavor = "current_thread")]
-# async fn main() -> KmsAeadResult<()> {
-# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-# // A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
-# let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
-# let dek = cipher.generate_dek()?;
-# let bare = cipher.encrypt_bare(b"aad", &SecretValue::from("secret"), &dek)?;
-# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
-# let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
-# legacy.extend_from_slice(encrypted_dek.value());
-# legacy.extend_from_slice(bare.value());
-# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
-#     provider,
-#     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-# )?;
-# let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
-# assert_eq!(upgrade_values(&envelope, &mut rows).await?, 1);
-# assert_eq!(upgrade_values(&envelope, &mut rows).await?, 0);
-# let upgraded = Encrypted::<SecretValue, Envelope>::try_from(rows[0].value.clone())?;
-# let decrypted: SecretValue = envelope.decrypt(b"aad", &upgraded).await?;
-# assert_eq!(decrypted, SecretValue::from("secret"));
-# Ok(())
-# }
 ```
 
-Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink's format.
+Upgrade every reader to 0.33 before the sweep writes: 0.29 and earlier cannot read Tink's format.
 
-## Deprecation
+## Removal
 
-Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
-breaking release, together with the `legacy-formats` feature and the upgrade methods, which carry
-`#[deprecated]` from their first release, so every call site warns. Without the feature, the
-older layouts keep failing with `LEGACY_FORMAT`.
+Reading the layouts of 0.29 and earlier was deprecated in 0.30.0. 0.33 is the last release with
+the `legacy-formats` feature and the two upgrade methods, and later releases refuse the older
+layouts with `LEGACY_FORMAT`.

@@ -32,9 +32,7 @@
 //! the bytes.
 
 use crate::backends::AeadBackend;
-use crate::errors::{
-    KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
-};
+use crate::errors::KmsAeadEncryptionError;
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider,
     KmsAeadEncryptionProvider, KmsAeadResult, KmsProvider,
@@ -50,7 +48,7 @@ pub use keys::{PrivateKeyFormat, PublicKeyFormat, SymmetricKeyFormat};
 
 mod tink;
 pub(crate) use tink::{
-    serialize_tink_key, split_tink_output_prefix, tink_output_prefix, TINK_OUTPUT_PREFIX_LEN,
+    TINK_OUTPUT_PREFIX_LEN, serialize_tink_key, split_tink_output_prefix, tink_output_prefix,
 };
 pub use tink::{TinkKeyType, TinkKeyset};
 
@@ -60,9 +58,6 @@ pub(crate) mod asymmetric;
 
 #[cfg(feature = "azure-kms-encryption-base")]
 pub(crate) mod azure;
-
-#[cfg(feature = "legacy-formats")]
-pub(crate) mod legacy;
 
 /// The first bytes of the encrypted DEK layout v1 of 0.29, `[0xFF][0x01][k][key version]` before
 /// the encrypted DEK, which no built-in provider's own bytes start with.
@@ -127,45 +122,25 @@ where
     Ok((dek, encrypted_dek))
 }
 
-/// The data encryption key that `encrypted_dek` holds, decrypted by `provider`, and the layout
-/// written by 0.29 or earlier that it was read from, if any. Only `legacy-formats` reads those
-/// layouts: the bytes of 0.29's encrypted DEK layout v1 given to a built-in provider, and an
-/// encrypted DEK that holds the raw key rather than a serialised Tink key. The bytes of an
-/// application's own provider are never inspected.
+/// The data encryption key that `encrypted_dek` holds, decrypted by `provider`.
 ///
 /// # Errors
 ///
 /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a serialised Tink
-/// key, or under an Azure KEK not a raw key, and without `legacy-formats` `LEGACY_FORMAT` for a
-/// layout of 0.29 or earlier.
+/// key, or under an Azure KEK not a raw key, and `LEGACY_FORMAT` for a layout of 0.29 or earlier:
+/// the bytes of 0.29's encrypted DEK layout v1 given to a built-in provider, refused before the
+/// KMS call, and an encrypted DEK that holds the raw key rather than a serialised Tink key.
 pub(crate) async fn decrypt_dek<P>(
     encrypted_dek: &EncryptedDataEncryptionKey,
     provider: &P,
-) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)>
+) -> KmsAeadResult<DataEncryptionKey>
 where
     P: KmsAeadDecryptionProvider,
 {
     let kek = provider.kek().provider();
-    match encrypted_dek_v1_body(encrypted_dek, kek) {
-        #[cfg(feature = "legacy-formats")]
-        Some(after_header) => {
-            let inner_encrypted_dek = legacy::encrypted_dek_from_layout_v1(after_header, kek)?;
-            let decrypted_dek = provider
-                .decrypt_data_encryption_key(&inner_encrypted_dek)
-                .await?;
-            let (dek, _) = key_from_decrypted(decrypted_dek, kek)?;
-            legacy::warn_once(KmsAeadLegacyFormat::EncryptedDekV1);
-            Ok((dek, Some(KmsAeadLegacyFormat::EncryptedDekV1)))
-        }
-        #[cfg(not(feature = "legacy-formats"))]
-        Some(_) => Err(KmsAeadLegacyFormatError::create(
-            KmsAeadLegacyFormat::EncryptedDekV1,
-        )),
-        None => {
-            let decrypted_dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
-            key_from_decrypted(decrypted_dek, kek)
-        }
-    }
+    refuse_encrypted_dek_v1(encrypted_dek, kek)?;
+    let decrypted_dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
+    key_from_decrypted(decrypted_dek, kek)
 }
 
 /// `encrypted_dek` decrypted by `provider` and encrypted again as the provider decrypted it: a
@@ -176,9 +151,7 @@ where
 ///
 /// # Errors
 ///
-/// The provider's errors, `INVALID_KEY_FORMAT` as for [`decrypt_dek`], and `LEGACY_FORMAT` for a
-/// layout of 0.29 or earlier, with or without `legacy-formats`, naming the upgrades rather than
-/// the feature.
+/// The provider's errors, and `INVALID_KEY_FORMAT` and `LEGACY_FORMAT` as for [`decrypt_dek`].
 pub(crate) async fn reencrypt_encrypted_dek<P>(
     encrypted_dek: &EncryptedDataEncryptionKey,
     provider: &P,
@@ -187,64 +160,50 @@ where
     P: KmsAeadDecryptionProvider,
 {
     let kek = provider.kek().provider();
-    if encrypted_dek_v1_body(encrypted_dek, kek).is_some() {
-        return Err(KmsAeadLegacyFormatError::refused_by_reencryption(
-            KmsAeadLegacyFormat::EncryptedDekV1,
-        ));
-    }
+    refuse_encrypted_dek_v1(encrypted_dek, kek)?;
     let decrypted_dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
-    match key_from_decrypted(decrypted_dek.clone(), kek) {
-        Ok((_, None)) => provider.encrypt_data_encryption_key(&decrypted_dek).await,
-        Ok((_, Some(format)))
-        | Err(KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError { format, .. })) => {
-            Err(KmsAeadLegacyFormatError::refused_by_reencryption(format))
-        }
-        Err(error) => Err(error),
-    }
+    key_from_decrypted(decrypted_dek.clone(), kek)?;
+    provider.encrypt_data_encryption_key(&decrypted_dek).await
 }
 
-/// The bytes after `[0xFF][0x01]` when `encrypted_dek`, given to a built-in provider of `kek`, is in
-/// the encrypted DEK layout v1 of 0.29. The bytes of an application's own provider are never
-/// inspected.
-fn encrypted_dek_v1_body<'e>(
-    encrypted_dek: &'e EncryptedDataEncryptionKey,
+/// `LEGACY_FORMAT` when `encrypted_dek`, given to a built-in provider of `kek`, is in the
+/// encrypted DEK layout v1 of 0.29, `[0xFF][0x01][k: u8][key version: k][encrypted DEK]`. The
+/// bytes of an application's own provider are never inspected.
+fn refuse_encrypted_dek_v1(
+    encrypted_dek: &EncryptedDataEncryptionKey,
     kek: &KmsProvider,
-) -> Option<&'e [u8]> {
+) -> KmsAeadResult<()> {
     match kek {
-        KmsProvider::Other(_) => None,
-        _ => encrypted_dek
+        KmsProvider::Other(_) => Ok(()),
+        _ if encrypted_dek
             .value()
-            .strip_prefix(&LEGACY_ENCRYPTED_DEK_V1_PREFIX),
+            .starts_with(&LEGACY_ENCRYPTED_DEK_V1_PREFIX) =>
+        {
+            Err(KmsAeadEncryptionError::legacy_format(
+                "the encrypted DEK layout v1",
+            ))
+        }
+        _ => Ok(()),
     }
 }
 
 /// The key in `decrypted_dek`, what the provider of `kek` decrypted: under an Azure KEK the raw key
-/// of 16, 32 or 64 bytes, and under any other a serialised Tink key, or with `legacy-formats` the
-/// raw key of 16 or 32 bytes that 0.29 and earlier encrypted. No serialised Tink key has any of
-/// those lengths.
+/// of 16, 32 or 64 bytes, and under any other a serialised Tink key. No serialised Tink key is 16
+/// or 32 bytes long, the raw keys that 0.29 and earlier encrypted.
 fn key_from_decrypted(
     decrypted_dek: DataEncryptionKey,
     kek: &KmsProvider,
-) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)> {
+) -> KmsAeadResult<DataEncryptionKey> {
     match (kek, decrypted_dek.value().ref_sensitive_value().len()) {
-        (KmsProvider::Azure, 16 | 32 | 64) => Ok((decrypted_dek, None)),
+        (KmsProvider::Azure, 16 | 32 | 64) => Ok(decrypted_dek),
         (KmsProvider::Azure, len) => Err(KmsAeadEncryptionError::create(
             "INVALID_KEY_FORMAT",
             &format!("The decrypted key of {len} bytes is not a raw key of 16, 32 or 64 bytes"),
         )),
-        #[cfg(feature = "legacy-formats")]
-        (_, 16 | 32) => {
-            legacy::warn_once(KmsAeadLegacyFormat::RawEncryptedDek);
-            Ok((decrypted_dek, Some(KmsAeadLegacyFormat::RawEncryptedDek)))
-        }
-        #[cfg(not(feature = "legacy-formats"))]
-        (_, 16 | 32) => Err(KmsAeadLegacyFormatError::create(
-            KmsAeadLegacyFormat::RawEncryptedDek,
+        (_, 16 | 32) => Err(KmsAeadEncryptionError::legacy_format(
+            "an encrypted DEK of the raw key rather than of a serialised Tink key",
         )),
-        _ => Ok((
-            tink::read_tink_key(decrypted_dek.value().ref_sensitive_value())?,
-            None,
-        )),
+        _ => tink::read_tink_key(decrypted_dek.value().ref_sensitive_value()),
     }
 }
 
@@ -258,9 +217,9 @@ fn split_u8_length_prefixed(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::KmsAeadError;
-    use crate::test_provider::{encrypted_by_test_provider, CountingKmsProvider, TestKmsProvider};
     use crate::KekRef;
+    use crate::errors::KmsAeadError;
+    use crate::test_provider::{CountingKmsProvider, TestKmsProvider, encrypted_by_test_provider};
     use secret_vault_value::SecretValue;
 
     const KEY: [u8; 32] = [0x42; 32];
@@ -275,7 +234,7 @@ mod tests {
     async fn a_tink_key_decrypts_to_its_key() -> KmsAeadResult<()> {
         let encrypted_dek = encrypted_by_test_provider(TinkKeyType::AesGcm, &KEY);
 
-        let (dek, legacy) = decrypt_dek(
+        let dek = decrypt_dek(
             &encrypted_dek,
             &CountingKmsProvider::with_kek(
                 TestKmsProvider::Working,
@@ -285,7 +244,6 @@ mod tests {
         .await?;
 
         assert_eq!(dek, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
-        assert_eq!(legacy, None);
         Ok(())
     }
 
@@ -303,11 +261,10 @@ mod tests {
             let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; len]));
 
             let encrypted_dek = encrypt_dek(&dek, key_type, &provider).await?;
-            let (decrypted_dek, legacy) = decrypt_dek(&encrypted_dek, &provider).await?;
+            let decrypted_dek = decrypt_dek(&encrypted_dek, &provider).await?;
 
             assert_eq!(encrypted_dek.value(), dek.value().ref_sensitive_value());
             assert_eq!(decrypted_dek, dek);
-            assert_eq!(legacy, None);
         }
         Ok(())
     }
@@ -330,56 +287,24 @@ mod tests {
         assert_eq!(provider.decryptions(), 1);
     }
 
-    #[cfg(not(feature = "legacy-formats"))]
     #[tokio::test]
-    async fn the_layouts_of_0_29_need_legacy_formats() {
+    async fn the_layouts_of_0_29_are_refused() {
         let provider = CountingKmsProvider::with_kek(
             TestKmsProvider::Working,
             KekRef::new(KmsProvider::Gcp, CLOUD_KMS_KEY),
         );
-        let cases = [
-            (
-                EncryptedDataEncryptionKey::new(KEY.to_vec()),
-                KmsAeadLegacyFormat::RawEncryptedDek,
-            ),
-            (
-                EncryptedDataEncryptionKey::new(hex::decode(ENCRYPTED_KEY_OF_0_29).unwrap()),
-                KmsAeadLegacyFormat::EncryptedDekV1,
-            ),
-        ];
-        for (encrypted_dek, format) in cases {
+        for encrypted_dek in [
+            EncryptedDataEncryptionKey::new(KEY.to_vec()),
+            EncryptedDataEncryptionKey::new(hex::decode(ENCRYPTED_KEY_OF_0_29).unwrap()),
+        ] {
             let result = decrypt_dek(&encrypted_dek, &provider).await;
             assert!(
-                matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
-                "{format:?}: {result:?}"
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "LEGACY_FORMAT"),
+                "{encrypted_dek:?}: {result:?}"
             );
         }
         // The encrypted DEK layout v1 is refused before any KMS call.
         assert_eq!(provider.decryptions(), 1);
-    }
-
-    #[cfg(feature = "legacy-formats")]
-    #[tokio::test]
-    async fn the_layouts_of_0_29_read_with_legacy_formats() -> KmsAeadResult<()> {
-        let provider = CountingKmsProvider::with_kek(
-            TestKmsProvider::Working,
-            KekRef::new(KmsProvider::Gcp, CLOUD_KMS_KEY),
-        );
-        let cases = [
-            (
-                EncryptedDataEncryptionKey::new(KEY.to_vec()),
-                KmsAeadLegacyFormat::RawEncryptedDek,
-            ),
-            (
-                EncryptedDataEncryptionKey::new(hex::decode(ENCRYPTED_KEY_OF_0_29).unwrap()),
-                KmsAeadLegacyFormat::EncryptedDekV1,
-            ),
-        ];
-        for (encrypted_dek, format) in cases {
-            let (dek, legacy) = decrypt_dek(&encrypted_dek, &provider).await?;
-            assert_eq!(dek, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
-            assert_eq!(legacy, Some(format));
-        }
-        Ok(())
     }
 }

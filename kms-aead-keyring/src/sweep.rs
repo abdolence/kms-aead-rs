@@ -109,10 +109,10 @@
 //! BigQuery rows written before the marker get `ENVELOPE` written into them first, or the
 //! migration scans them once instead of querying.
 //!
-//! Values written by kms-aead 0.29 or earlier are in layouts this call does not read: they are
-//! upgraded in place first, with kms-aead's `legacy-formats` feature and
-//! `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD. The layout of a value
-//! is always the marker's, never guessed from its bytes.
+//! Values written by kms-aead 0.29 or earlier are in layouts this call does not read, and fail
+//! with the code `LEGACY_FORMAT`: they are rewritten in place first, on kms-aead 0.33 with its
+//! `legacy-formats` feature, whose `KmsAeadEnvelope::upgrade_legacy_value` takes the value's AAD.
+//! The layout of a value is always the marker's, never guessed from its bytes.
 //!
 //! # Cancellation
 //!
@@ -144,7 +144,7 @@ use rsb_derive::Builder;
 use tracing::Instrument;
 
 use crate::errors::{KeyringError, KeyringResult};
-use crate::{spans, KeyringId, Reencrypted};
+use crate::{KeyringId, Reencrypted, spans};
 
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -325,8 +325,9 @@ pub struct SweepReport {
     pub reencrypted_from_compromised: u64,
     /// The records the re-encryption skipped.
     pub skipped: u64,
-    /// The candidates the stream returned as an error, and the records whose re-encryption returned
-    /// an error or no outcome.
+    /// The candidates the stream returned as an error, the records whose re-encryption returned
+    /// an error, and every candidate of a batch that failed as a whole or returned another number
+    /// of outcomes than it was given candidates.
     pub failed: u64,
 }
 
@@ -421,17 +422,19 @@ where
     let span = spans::sweep(keyring_id);
     let report = async {
         let mut report = SweepReport::default();
-        let mut outcomes = pin!(candidates
-            .map(|candidate| {
-                // Formatted before `reencrypt` takes the candidate, for the log line of a failure.
-                let reencrypting =
-                    candidate.map(|candidate| (candidate.to_string(), reencrypt(candidate)));
-                async move {
-                    let (candidate, outcome) = reencrypting?;
-                    Ok::<_, E>((candidate, outcome.await))
-                }
-            })
-            .buffer_unordered(concurrency.get()));
+        let mut outcomes = pin!(
+            candidates
+                .map(|candidate| {
+                    // Formatted before `reencrypt` takes the candidate, for the log line of a failure.
+                    let reencrypting =
+                        candidate.map(|candidate| (candidate.to_string(), reencrypt(candidate)));
+                    async move {
+                        let (candidate, outcome) = reencrypting?;
+                        Ok::<_, E>((candidate, outcome.await))
+                    }
+                })
+                .buffer_unordered(concurrency.get())
+        );
         while let Some(reencrypted) = outcomes.next().await {
             match reencrypted {
                 Ok((candidate, outcome)) => {
@@ -462,12 +465,12 @@ where
 ///
 /// `reencrypt_batch` returns one outcome per candidate it was given, each beside its candidate, in
 /// any order, or an error for the whole batch, which counts every candidate of the batch in
-/// `failed` and logs one `WARN` with the error's `Display` and the size of the batch. The sweep
-/// counts a batch by the candidates it was given: an outcome for a candidate outside the batch,
-/// or a second one for the same candidate, can only take the place of one the batch left out, and
-/// never adds to `scanned`. A batch that returns fewer outcomes than it was given counts the
-/// difference in `failed`, since the sweep cannot tell which candidates they were. Either way the
-/// sweep logs one `WARN` with both counts.
+/// `failed` and logs one `WARN` with the error's `Display` and the size of the batch. A batch that
+/// returns more or fewer outcomes than it was given candidates counts every one of them in
+/// `failed` too, since the sweep cannot tell which outcome is whose, and logs one `WARN` with
+/// both counts; its outcomes are neither counted nor logged. With as many outcomes as candidates,
+/// an outcome for a candidate outside the batch, or a second one for the same candidate, takes the
+/// place of the one the batch left out and is counted for it.
 ///
 /// A failed outcome is counted and logged as in [`reencrypt_records`], and the sweep goes on. One
 /// [`Encryptor`](crate::Encryptor) re-encrypts a whole batch and stamps its marker on every record
@@ -488,44 +491,44 @@ where
     let span = spans::sweep(keyring_id);
     let report = async {
         let mut report = SweepReport::default();
-        let mut batches = pin!(candidates
-            .chunks(options.batch_size.get())
-            .map(|batch| {
-                let mut candidates: Vec<T> = Vec::with_capacity(batch.len());
-                let mut unread: Vec<E> = Vec::new();
-                for candidate in batch {
-                    match candidate {
-                        Ok(candidate) => candidates.push(candidate),
-                        Err(error) => unread.push(error),
+        let mut batches = pin!(
+            candidates
+                .chunks(options.batch_size.get())
+                .map(|batch| {
+                    let mut candidates: Vec<T> = Vec::with_capacity(batch.len());
+                    let mut unread: Vec<E> = Vec::new();
+                    for candidate in batch {
+                        match candidate {
+                            Ok(candidate) => candidates.push(candidate),
+                            Err(error) => unread.push(error),
+                        }
                     }
-                }
-                let given = candidates.len();
-                let reencrypting = (given > 0).then(|| reencrypt_batch(candidates));
-                async move { (unread, given, OptionFuture::from(reencrypting).await) }
-            })
-            .buffer_unordered(options.concurrency.get()));
+                    let given = candidates.len();
+                    let reencrypting = (given > 0).then(|| reencrypt_batch(candidates));
+                    async move { (unread, given, OptionFuture::from(reencrypting).await) }
+                })
+                .buffer_unordered(options.concurrency.get())
+        );
         while let Some((unread, given, outcomes)) = batches.next().await {
             for error in &unread {
                 report.count_unread(keyring_id, error);
             }
             let given_count = u64::try_from(given).unwrap_or(u64::MAX);
             match outcomes {
-                Some(Ok(outcomes)) => {
-                    let returned = outcomes.len();
-                    if returned != given {
-                        let returned_count = u64::try_from(returned).unwrap_or(u64::MAX);
-                        spans::sweep_batch_outcomes_mismatched(
-                            keyring_id,
-                            given_count,
-                            returned_count,
-                        );
-                    }
+                Some(Ok(outcomes)) if outcomes.len() == given => {
                     report.scanned += given_count;
-                    report.failed +=
-                        u64::try_from(given.saturating_sub(returned)).unwrap_or(u64::MAX);
-                    for (candidate, outcome) in outcomes.into_iter().take(given) {
+                    for (candidate, outcome) in outcomes {
                         report.count_outcome(keyring_id, &candidate, outcome);
                     }
+                }
+                Some(Ok(outcomes)) => {
+                    report.scanned += given_count;
+                    report.failed += given_count;
+                    spans::sweep_batch_outcomes_mismatched(
+                        keyring_id,
+                        given_count,
+                        u64::try_from(outcomes.len()).unwrap_or(u64::MAX),
+                    );
                 }
                 Some(Err(error)) => {
                     report.scanned += given_count;
@@ -550,12 +553,12 @@ mod tests {
 
     use futures_util::stream;
     use jiff::Timestamp;
-    use kms_aead::formats::Randomized;
     use kms_aead::KmsAeadResult;
+    use kms_aead::formats::Randomized;
     use proptest::prelude::*;
 
     use super::*;
-    use crate::test_support::{TestResult, TENANT};
+    use crate::test_support::{TENANT, TestResult};
     use crate::{Compromise, Encrypted, KeyTrust};
 
     /// Epochs on either side of every byte boundary of the big-endian layout.
@@ -669,8 +672,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_records_counts_scanned_reencrypted_skipped_failed_with_the_applications_errors(
-    ) {
+    async fn reencrypt_records_counts_scanned_reencrypted_skipped_failed_with_the_applications_errors()
+     {
         let report = reencrypt_records(
             &TENANT,
             stream::iter((1..=6).map(Ok)),
@@ -762,16 +765,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_records_batched_counts_the_outcomes_a_batch_left_out_as_failed() {
+    async fn reencrypt_records_batched_counts_a_batch_with_more_outcomes_as_failed() {
         let report = reencrypt_records_batched(
             &TENANT,
-            stream::iter((1..=5).map(Ok)),
+            stream::iter((1..=3).map(Ok)),
             BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
             |batch: Vec<u32>| async move {
+                let failed_outside_the_batch = batch.contains(&1).then(|| (4, outcome_of(4)));
                 Ok(batch
                     .into_iter()
-                    .take(1)
                     .map(|candidate| (candidate, outcome_of(candidate)))
+                    .chain(failed_outside_the_batch)
                     .collect())
             },
         )
@@ -780,47 +784,18 @@ mod tests {
         assert_eq!(
             report,
             SweepReport {
-                scanned: 5,
-                reencrypted: 1,
+                scanned: 3,
+                reencrypted: 0,
                 reencrypted_from_compromised: 0,
                 skipped: 1,
-                failed: 3,
+                failed: 2,
             }
         );
     }
 
     #[tokio::test]
-    async fn reencrypt_records_batched_counts_no_more_outcomes_than_a_batch_was_given() {
-        let report = reencrypt_records_batched(
-            &TENANT,
-            stream::iter([Ok(1), Ok(2)]),
-            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
-            |batch: Vec<u32>| async move {
-                Ok(batch
-                    .into_iter()
-                    .flat_map(|candidate| {
-                        [candidate; 2].map(|candidate| (candidate, outcome_of(candidate)))
-                    })
-                    .collect())
-            },
-        )
-        .await;
-
-        assert_eq!(
-            report,
-            SweepReport {
-                scanned: 2,
-                reencrypted: 2,
-                reencrypted_from_compromised: 0,
-                skipped: 0,
-                failed: 0,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn reencrypt_records_batched_counts_a_candidate_the_stream_failed_to_read_as_scanned_and_failed(
-    ) {
+    async fn reencrypt_records_batched_counts_a_candidate_the_stream_failed_to_read_as_scanned_and_failed()
+     {
         let candidates = stream::iter([
             Ok(1),
             Err(io::Error::other("the users query failed")),
@@ -891,16 +866,16 @@ mod tests {
         use std::collections::BTreeMap;
         use std::sync::{Mutex, PoisonError};
 
-        use kms_aead::formats::Randomized;
         #[cfg(feature = "deterministic")]
         use kms_aead::DeterministicAlgorithm;
+        use kms_aead::formats::Randomized;
         use kms_aead::{
             AeadAlgorithm, BeaconAlgorithm, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
         };
 
         use super::*;
         use crate::test_support::{
-            email_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry,
+            TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, email_of,
         };
         use crate::testing::MemoryKeyringStore;
         use crate::{
@@ -1015,8 +990,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn reencrypt_records_writes_the_marker_alone_when_a_beacon_rotation_leaves_the_value_current(
-        ) -> TestResult {
+        async fn reencrypt_records_writes_the_marker_alone_when_a_beacon_rotation_leaves_the_value_current()
+        -> TestResult {
             let admin = TestRegistry::new(
                 MemoryKeyringStore::new(),
                 KeyringRegistryOptions::new().with_watch(false),
@@ -1056,8 +1031,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn reencrypt_records_reencrypts_a_value_under_a_decrypt_only_version_above_the_active_one(
-        ) -> TestResult {
+        async fn reencrypt_records_reencrypts_a_value_under_a_decrypt_only_version_above_the_active_one()
+        -> TestResult {
             let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
             let keyring = admin.keyring();
             let users = Users::default();
@@ -1279,12 +1254,14 @@ mod tests {
                 .await
                 .encrypt(&aad, &ALICE.to_string())
                 .await?;
-            assert!(keyring
-                .encryptor()
-                .await
-                .reencrypt(&aad, &old)
-                .await?
-                .is_none());
+            assert!(
+                keyring
+                    .encryptor()
+                    .await
+                    .reencrypt(&aad, &old)
+                    .await?
+                    .is_none()
+            );
 
             let rotation = admin
                 .promote_now(admin.rotate(Purpose::Randomized).await?)
@@ -1299,12 +1276,14 @@ mod tests {
             assert_eq!(reencrypted.value.key_id(), rotation.current);
             assert_eq!(reencrypted.trust, KeyTrust::Trusted);
             assert_eq!(keyring.decrypt(&aad, &reencrypted.value).await?, ALICE);
-            assert!(keyring
-                .encryptor()
-                .await
-                .reencrypt(&aad, &reencrypted.value)
-                .await?
-                .is_none());
+            assert!(
+                keyring
+                    .encryptor()
+                    .await
+                    .reencrypt(&aad, &reencrypted.value)
+                    .await?
+                    .is_none()
+            );
             Ok(())
         }
 
@@ -1356,12 +1335,14 @@ mod tests {
                 .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?;
-            assert!(keyring
-                .encryptor()
-                .await
-                .reencrypt_deterministic(&aad, &old)
-                .await?
-                .is_none());
+            assert!(
+                keyring
+                    .encryptor()
+                    .await
+                    .reencrypt_deterministic(&aad, &old)
+                    .await?
+                    .is_none()
+            );
 
             let rotation = admin
                 .promote_now(admin.rotate(Purpose::Deterministic).await?)

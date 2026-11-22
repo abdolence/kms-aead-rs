@@ -1,8 +1,8 @@
 use super::split_u8_length_prefixed;
 use crate::asymmetric_kek::ASYMMETRIC_KEK_RSA_BITS;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::providers::kms_key_version::read_kek_version;
 use crate::providers::KmsKeyVersion;
+use crate::providers::kms_key_version::read_kek_version;
 use crate::{AsymmetricKekAlgorithm, KmsAeadResult};
 
 /// An encrypted DEK that a public key encrypted, the one layout of every provider:
@@ -88,7 +88,7 @@ impl<'e> PublicKeyEncryptedDek<'e> {
             _ => {
                 return Err(Self::malformed(
                     "names an algorithm the library does not know",
-                ))
+                ));
             }
         };
         let (kek_id, rest) = split_u8_length_prefixed(rest)

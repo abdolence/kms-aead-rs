@@ -1,5 +1,5 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use kms_aead::cache::{DekCache, DekCacheOutcome};
@@ -15,13 +15,14 @@ use serde_json::Value;
 
 use super::*;
 use crate::errors::{
-    PromotionTooEarlyError, RecordConflictError, RecordRegressedError, RegressionRule,
+    PromotionTooEarlyError, RecordConflictError, RecordInvalidError, RecordInvalidReason,
+    RecordRegressedError, RegressionRule,
 };
 use crate::store::KeyringStore;
 use crate::sweep::EncryptionMarker;
 use crate::test_support::{
-    email_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
-    TestStore, EMAIL, TENANT,
+    EMAIL, TENANT, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
+    TestStore, email_of,
 };
 use crate::testing::MemoryKeyringStore;
 use crate::{
@@ -929,10 +930,12 @@ async fn dangerously_destroy_all_versions_leaves_nothing_to_encrypt_or_decrypt_w
         keyring.record(),
         fixture.other_process().await?.keyring().record(),
     ] {
-        assert!(record
-            .versions()
-            .iter()
-            .all(|version| version.state() == KeyVersionState::Destroyed));
+        assert!(
+            record
+                .versions()
+                .iter()
+                .all(|version| version.state() == KeyVersionState::Destroyed)
+        );
     }
     assert!(matches!(
         keyring
@@ -1033,11 +1036,12 @@ async fn an_interrupted_shred_is_completed_by_running_it_again() -> TestResult {
         .load(&TENANT)
         .await?
         .ok_or("the record is gone")?;
-    assert!(left
-        .record
-        .versions()
-        .iter()
-        .all(|version| version.state() == KeyVersionState::Destroyed));
+    assert!(
+        left.record
+            .versions()
+            .iter()
+            .all(|version| version.state() == KeyVersionState::Destroyed)
+    );
     fixture
         .store
         .calls
@@ -1502,8 +1506,8 @@ async fn an_encryptor_encrypts_every_field_under_the_record_its_marker_names() -
 }
 
 #[tokio::test]
-async fn an_encryptor_older_than_a_value_refuses_to_reencrypt_it_under_its_own_versions(
-) -> TestResult {
+async fn an_encryptor_older_than_a_value_refuses_to_reencrypt_it_under_its_own_versions()
+-> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let admin = fixture.other_process().await?;
     let aad = email_of("42")?;
@@ -1645,10 +1649,12 @@ async fn an_encryptor_that_holds_a_values_version_as_pending_refuses_to_reencryp
         refused.map(|reencrypted| reencrypted.map(|reencrypted| reencrypted.value.key_id()))
     );
     let encryptor = keyring.encryptor().await;
-    assert!(encryptor
-        .reencrypt_deterministic(&aad, &newer)
-        .await?
-        .is_none());
+    assert!(
+        encryptor
+            .reencrypt_deterministic(&aad, &newer)
+            .await?
+            .is_none()
+    );
     let reencrypted = encryptor
         .reencrypt_deterministic(&aad, &old)
         .await?
@@ -1795,6 +1801,62 @@ async fn a_regressed_record_is_refused() -> TestResult {
         Err(KeyringError::RecordRegressed(RecordRegressedError { rule: refused, .. })) if refused == rule
     ));
     assert_eq!(fixture.keyring.record().to_json()?, held);
+    Ok(())
+}
+
+/// A record that holds a member this release does not know, in the record or in a version, as one a
+/// later release wrote can: a reader takes it, and an administrative write leaves it as it is.
+#[tokio::test]
+async fn an_admin_write_over_a_record_with_unknown_members_is_refused() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let mut outcomes = Vec::new();
+    for object in ["", "/versions/0"] {
+        let stored = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+        let mut document: Value = serde_json::from_slice(&stored.record.to_json()?)?;
+        document
+            .pointer_mut(object)
+            .and_then(Value::as_object_mut)
+            .ok_or("no such object")?
+            .insert("added_later".to_string(), Value::Bool(true));
+        fixture
+            .memory
+            .write_document(&TENANT, serde_json::to_vec(&document)?);
+        let written = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+
+        fixture.keyring.reload().await?;
+        let reason = match fixture.admin.reencrypt_deks().await {
+            Err(KeyringError::RecordInvalid(RecordInvalidError { reason, .. })) => Some(reason),
+            _ => None,
+        };
+        let after = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+
+        outcomes.push((reason, after.revision == written.revision));
+    }
+
+    let refused = (Some(RecordInvalidReason::UnknownMembers), true);
+    assert_eq!(outcomes, [refused.clone(), refused]);
+    Ok(())
+}
+
+/// A record 0.30 wrote, with no `mac` algorithm and no signature, holds no member this release
+/// does not know, and an administrative write over it goes through.
+#[tokio::test]
+async fn an_admin_write_over_a_record_without_the_later_members_goes_through() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let stored = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+    let mut document: Value = serde_json::from_slice(&stored.record.to_json()?)?;
+    document["algorithms"]
+        .as_object_mut()
+        .ok_or("no algorithms")?
+        .remove("mac");
+    fixture
+        .memory
+        .write_document(&TENANT, serde_json::to_vec(&document)?);
+
+    fixture.keyring.reload().await?;
+    let staged = fixture.admin.rotate(Purpose::Randomized).await?;
+
+    assert_eq!(staged, KeyId::new(2));
     Ok(())
 }
 
@@ -2233,13 +2295,13 @@ async fn promote_succeeds_once_the_record_ttl_has_passed() -> TestResult {
 /// Keyrings under an asymmetric KEK, which need RSA and so run on aws-lc or RustCrypto.
 #[cfg(any(feature = "aws-lc", feature = "rustcrypto"))]
 mod asymmetric_kek {
+    use kms_aead::KekRef;
     use kms_aead::providers::{LocalSigningKeyName, LocalSigningProvider};
     use kms_aead::signing::{Signer, SigningAlgorithm, VerifyingKeySet};
-    use kms_aead::KekRef;
     use tracing::Level;
 
     use super::*;
-    use crate::test_support::{local_asymmetric, EventCapture, ReportedKekProvider, RsaBackend};
+    use crate::test_support::{EventCapture, ReportedKekProvider, RsaBackend, local_asymmetric};
     use crate::{KeyringRegistry, RecordSignaturePolicy};
 
     type RsaRegistry = KeyringRegistry<MemoryKeyringStore, RsaBackend>;
@@ -2438,8 +2500,8 @@ mod asymmetric_kek {
     }
 
     #[tokio::test]
-    async fn a_public_key_encrypted_record_warns_each_time_it_is_loaded_under_verify_if_signed(
-    ) -> TestResult {
+    async fn a_public_key_encrypted_record_warns_each_time_it_is_loaded_under_verify_if_signed()
+    -> TestResult {
         let (administration, application) = administration_and_application(cloud_kms_key())?;
         let store = MemoryKeyringStore::new();
         let admin = registry(&store, RecordSignaturePolicy::default())

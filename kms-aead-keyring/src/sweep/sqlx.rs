@@ -38,8 +38,8 @@ mod tests {
     use sqlx::{Connection, PgConnection};
 
     use super::*;
-    use crate::test_support::TestResult;
     use crate::KeyringError;
+    use crate::test_support::TestResult;
 
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]

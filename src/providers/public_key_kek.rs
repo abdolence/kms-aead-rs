@@ -287,12 +287,12 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for PublicKeyKekProvider<B> {
 /// [`decrypt_data_encryption_key`](KmsAeadDecryptionProvider::decrypt_data_encryption_key) is
 /// `P`'s, which reads the DEKs its KMS encrypted and the ones a public key encrypted alike; and
 /// [`encrypts_with_public_key`](KmsAeadEncryptionProvider::encrypts_with_public_key) is `true`.
-pub struct AsymmetricKekProvider<B: AeadBackend, P> {
+pub struct AsymmetricKekProvider<P, B: AeadBackend> {
     public_half: PublicKeyKekProvider<B>,
     private_half: P,
 }
 
-impl<B: AeadBackend, P: KmsAeadDecryptionProvider> AsymmetricKekProvider<B, P> {
+impl<P: KmsAeadDecryptionProvider, B: AeadBackend> AsymmetricKekProvider<P, B> {
     /// Parses the key on `B` and logs the KEK, the version and the fingerprint at `INFO`.
     ///
     /// # Errors
@@ -330,7 +330,7 @@ impl<B: AeadBackend, P: KmsAeadDecryptionProvider> AsymmetricKekProvider<B, P> {
 }
 
 /// The public half and the private half's `Debug`.
-impl<B: AeadBackend, P: Debug> Debug for AsymmetricKekProvider<B, P> {
+impl<P: Debug, B: AeadBackend> Debug for AsymmetricKekProvider<P, B> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AsymmetricKekProvider")
             .field("public_half", &self.public_half)
@@ -339,8 +339,8 @@ impl<B: AeadBackend, P: Debug> Debug for AsymmetricKekProvider<B, P> {
     }
 }
 
-impl<B: AeadBackend, P: KmsAeadDecryptionProvider> KmsAeadEncryptionProvider
-    for AsymmetricKekProvider<B, P>
+impl<P: KmsAeadDecryptionProvider, B: AeadBackend> KmsAeadEncryptionProvider
+    for AsymmetricKekProvider<P, B>
 {
     fn kek(&self) -> &KekRef {
         self.private_half.kek()
@@ -366,8 +366,8 @@ impl<B: AeadBackend, P: KmsAeadDecryptionProvider> KmsAeadEncryptionProvider
     }
 }
 
-impl<B: AeadBackend, P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider
-    for AsymmetricKekProvider<B, P>
+impl<P: KmsAeadDecryptionProvider, B: AeadBackend> KmsAeadDecryptionProvider
+    for AsymmetricKekProvider<P, B>
 {
     async fn decrypt_data_encryption_key(
         &self,
@@ -389,7 +389,7 @@ mod tests {
     use crate::providers::{
         KmsKeyVersion, LocalAsymmetricKek, LocalAsymmetricKmsProvider, LocalKekId, LocalKekVersion,
     };
-    use crate::test_provider::{assert_code, RsaOaepSuite, RsaTestBackend};
+    use crate::test_provider::{RsaOaepSuite, RsaTestBackend, assert_code};
     use crate::{AsymmetricKekAlgorithm, Encrypted, KmsAeadEnvelope};
 
     const AAD: &[u8] = b"orders/1042";
@@ -443,6 +443,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_producer_encrypts_with_a_public_key() -> KmsAeadResult<()> {
+        let (_, producer) = reader_and_producer()?;
+        let producer = std::sync::Arc::new(producer);
+
+        assert!(KmsAeadEncryptionProvider::encrypts_with_public_key(
+            &std::sync::Arc::clone(&producer)
+        ));
+        assert!(KmsAeadEncryptionProvider::encrypts_with_public_key(
+            &producer.as_ref()
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn a_pinned_producer_refuses_a_key_of_another_fingerprint() -> KmsAeadResult<()> {
         let (reader, producer) = reader_and_producer()?;
         let public_key = reader.public_key(None)?;
@@ -467,7 +481,7 @@ mod tests {
         )?;
 
         assert_code(
-            AsymmetricKekProvider::<RsaTestBackend, _>::new(other.public_key(None)?, reader),
+            AsymmetricKekProvider::<_, RsaTestBackend>::new(other.public_key(None)?, reader),
             "ASYMMETRIC_KEK_MISMATCH",
         );
         Ok(())
@@ -542,8 +556,8 @@ mod tests {
             crate::formats::PublicKeyFormat::SpkiDer,
         )?;
         let administration = KmsAeadEnvelope::<_, RsaTestBackend>::new(AsymmetricKekProvider::<
-            RsaTestBackend,
             _,
+            RsaTestBackend,
         >::new(
             public_key,
             AzureDouble {
@@ -575,9 +589,9 @@ mod tests {
     #[cfg(feature = "ring")]
     #[test]
     fn ring_refuses_rsa_at_construction() -> KmsAeadResult<()> {
+        use crate::BackendAlgorithm;
         use crate::backends::Ring;
         use crate::errors::KmsAeadError;
-        use crate::BackendAlgorithm;
         let (reader, _) = reader_and_producer()?;
 
         let result = PublicKeyKekProvider::<Ring>::new(reader.public_key(None)?);

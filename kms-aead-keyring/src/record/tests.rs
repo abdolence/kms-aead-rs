@@ -1,10 +1,10 @@
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use serde_json::{json, Value};
+use base64::engine::general_purpose::STANDARD;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::errors::{RecordInvalidError, RecordInvalidReason};
-use crate::test_support::{TestResult, TENANT};
+use crate::test_support::{TENANT, TestResult};
 
 const CREATED: &str = "2026-01-10T09:00:00Z";
 const ROTATED: &str = "2026-04-10T09:00:00Z";
@@ -253,6 +253,15 @@ fn a_key_id_of_the_wrong_purpose_is_rejected() -> KeyringResult<()> {
         Some(RecordInvalidReason::PurposeMismatch(KeyId::new(
             0x8000_0001
         )))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_key_id_with_an_ordinal_from_2_to_the_24_is_rejected() -> KeyringResult<()> {
+    assert_eq!(
+        refusal(&document(vec![version(1 << 24, "active", false)?])),
+        Some(RecordInvalidReason::ReservedKeyId)
     );
     Ok(())
 }

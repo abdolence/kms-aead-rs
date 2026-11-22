@@ -34,8 +34,9 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
    [The registry and its handles](../keyring.md#the-registry-and-its-handles);
 2. `registry.open(provider, keyring_id)` for each tenant the process serves. A second open of an
    open keyring reads nothing from the store and shares the first one's record and watch. The call
-   takes the provider by value: `GcpKmsProvider` and `HcVaultTransitProvider` are `Clone`, and the
-   other providers are built once per keyring;
+   takes the provider by value: one provider serves every keyring of its KEK as an `Arc<P>`, which
+   implements the provider traits for every provider, or as a clone of a provider that is `Clone`,
+   such as `GcpKmsProvider`, `AwsKmsProvider` and `HcVaultTransitProvider`;
 3. a `FieldSpec` constant per encrypted field, the same for every tenant, since each keyring
    has DEKs of its own, see [Encrypted fields and AAD](../keyring/fields.md);
 4. on every write, `keyring.encryptor()` and its `encrypt`, and the encryption marker it gives,
@@ -52,7 +53,9 @@ Rotations and sweeps run per keyring: the administrative job loops over the tena
 An application that creates a keyring on a tenant's first request builds with the `admin` feature
 and runs with the administrative rights, so it is trusted as the administration is, see
 [Permissions: applications and administration](../production/permissions.md) and
-[Keyring limits](../security.md#keyring-limits).
+[Keyring limits](../security.md#keyring-limits). Under `RecordSignaturePolicy::Required` it holds
+the record signer too and calls `open_or_create_signed`: `open_or_create` fails with
+`RECORD_SIGNER_MISSING` where it would create the record.
 
 ### What many keyrings cost
 

@@ -30,14 +30,15 @@ Tink for Go for Vault Transit keys too. A keyring exports it for its versions, s
 ## Keyring key ids
 
 kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
-under it. The two high bits of the id are the purpose, and the rest is the ordinal:
+under it. The two high bits of the id are the purpose, and bits 0 to 23 are the ordinal:
 
 | Bits | Meaning |
 |---|---|
 | 31 | set for deterministic versions, alone |
 | 30 | set for beacon versions, alone |
 | 31 and 30 | set for MAC versions |
-| 0 to 29 | the ordinal, from 1, counted per purpose |
+| 24 to 29 | reserved: clear in the id of every version |
+| 0 to 23 | the ordinal, from 1, counted per purpose |
 
 So the ids of each purpose are:
 
@@ -46,11 +47,17 @@ So the ids of each purpose are:
 - beacon: `1073741825`, `1073741826`, …;
 - MAC: `3221225473`, `3221225474`, ….
 
-An id whose ordinal is 0 is reserved: `0`, `2^30`, `2^31` and `2^31 + 2^30`. A value that carries
-one fails with `ReservedKeyId`. A value whose id is of another
-purpose than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. Ids
-are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
-a SQL column holding one is a `BIGINT`.
+Two kinds of id are reserved, and no version has one:
+
+- an id whose ordinal is 0: `0`, `2^30`, `2^31` and `2^31 + 2^30`;
+- an id with any of bits 24 to 29 set. These bits are kept for purposes a later release may add,
+  so a reader refuses such an id rather than take it for a version of one of the four purposes.
+
+A value that carries a reserved id fails with `ReservedKeyId`, and a value whose id is of another
+purpose than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. A
+record that holds a reserved id fails with `RecordInvalid` and the reason `ReservedKeyId`. Each
+purpose has 2^24 - 1 ordinals, and ids are never reused: a destroyed version keeps its id in the
+record. A key id goes up to 2^32 - 1, so a SQL column holding one is a `BIGINT`.
 
 ## Keyring records
 
@@ -199,6 +206,14 @@ A reader fails with `RecordInvalid` on a document that breaks any of:
 - a `seal_epoch` of 1 or more;
 - `seal_epochs` on every active, decrypt-only and retired version and on no pending one, open on
   the active version, starting at 1 or more and below its end, and within the `seal_epoch`.
+
+A reader reads past a member it does not know, at any depth, and keeps it in the canonical digest
+that a signature covers. An administrative write refuses a record that holds one, with
+`RecordInvalid` and the reason `UnknownMembers`, before it writes anything: the record it writes
+holds only the members its release knows, so the others would be lost, and a signing
+administration would sign what is left. Once a later release writes a member into a record, an
+administrative binary of an earlier release still reads the record and no longer writes it, until
+it moves to that release.
 
 ## Encryption markers
 

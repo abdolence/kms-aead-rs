@@ -29,7 +29,7 @@ use crate::signing::{
     Signature, Signer, SigningAlgorithm, Verifier, VerifyingKey, VerifyingKeySet,
 };
 use crate::test_provider::{
-    Invoice, ED25519_PKCS8_DER, ED25519_SIGNATURE, INVOICE_PAYLOAD, P256_PKCS8_DER, P256_SIGNATURE,
+    ED25519_PKCS8_DER, ED25519_SIGNATURE, INVOICE_PAYLOAD, Invoice, P256_PKCS8_DER, P256_SIGNATURE,
 };
 use crate::{
     AeadAlgorithm, AeadCipher, BeaconAlgorithm, BeaconBits, BeaconMac, DataEncryptionKey,

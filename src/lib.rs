@@ -115,7 +115,6 @@
 //! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`];
 //! - `stream`: streamed values of any length, encrypted and decrypted chunk by chunk with ranged
 //!   reads, in C2SP's chunked encryption: the `stream` module and its tokio adapters;
-//! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated;
 //! - `postgres`: `ToSql` and `FromSql` of postgres-types for [`Encrypted`], as `BYTEA`, and
 //!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres;
 //! - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for [`Encrypted`] on
@@ -316,10 +315,10 @@ pub use signable::{Signable, SignableType, SignedPayloadType};
 
 pub mod signing;
 
-mod metrics;
 #[cfg(feature = "opentelemetry")]
-#[doc(hidden)]
-pub use metrics::instruments as __instruments;
+pub mod metrics;
+#[cfg(not(feature = "opentelemetry"))]
+mod metrics;
 
 mod spans;
 
@@ -339,7 +338,6 @@ pub mod stream;
     feature = "aws-lc",
     feature = "rustcrypto",
     feature = "deterministic",
-    feature = "legacy-formats",
     feature = "postgres",
     feature = "sqlx",
     feature = "gcp-kms-encryption",

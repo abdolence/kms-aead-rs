@@ -1,8 +1,8 @@
 //! A provider for unit tests that need no KMS, whose "encrypted" key is the plaintext it is given,
 //! the backend those tests run on, and the waits the concurrency tests share.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use secret_vault_value::SecretValue;
@@ -227,41 +227,48 @@ pub(crate) struct TinkEnvelope {
 
 /// The bytes of an invoice the signing and MAC tests sign, under the payload type of the book's
 /// test vectors.
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 pub(crate) struct Invoice(pub(crate) Vec<u8>);
 
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 impl crate::SignableType for Invoice {
     const PAYLOAD_TYPE: crate::SignedPayloadType =
         crate::SignedPayloadType::from_static("application/vnd.example.invoice+json");
 }
 
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 impl crate::Signable for Invoice {
     fn to_payload(&self) -> KmsAeadResult<Vec<u8>> {
         Ok(self.0.clone())
     }
 
-    fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
-        Ok(Invoice(payload))
+    fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
+        Ok(Invoice(payload.to_vec()))
     }
 }
 
 /// The payload of the book's test vectors.
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 pub(crate) const INVOICE_PAYLOAD: &[u8] =
     br#"{"number":"INV-1042","customer":"Northwind Traders","currency":"EUR","total_cents":12500}"#;
 
 /// [`INVOICE_PAYLOAD`] with another total.
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 pub(crate) const OTHER_INVOICE_PAYLOAD: &[u8] =
     br#"{"number":"INV-1042","customer":"Northwind Traders","currency":"EUR","total_cents":99900}"#;
 
 /// The PKCS#8 of the RFC 8032 section 7.1 test 1 key, whose key id is `0x90facafe`.
-pub(crate) const ED25519_PKCS8_DER: &str =
-    "302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
+pub(crate) const ED25519_PKCS8_DER: &str = "302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
 
 /// The RFC 8032 test 1 signature of the pre-image of [`INVOICE_PAYLOAD`].
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 pub(crate) const ED25519_SIGNATURE: &str = "21c5f4d55977b19640f25f0e248d4c9765aa0d210f9c781b61b46dece74d4dec\
                                             b950acf3947659a9fff322b88ad8562e2c9ee4392440a4da901b7fec385f1102";
 
 /// The PKCS#8 of the RFC 6979 A.2.5 key with its public point, as Python's `cryptography` writes
 /// it. Its key id is `0x0cebf1bc`.
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 pub(crate) const P256_PKCS8_DER: &str = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02\
                                          01010420c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b\
                                          120f6721a1440342000460fed4ba255a9d31c961eb74c6356d68c049b8923b61\
@@ -270,6 +277,7 @@ pub(crate) const P256_PKCS8_DER: &str = "308187020100301306072a8648ce3d020106082
 
 /// A P-256 signature of the pre-image of [`INVOICE_PAYLOAD`] under the RFC 6979 A.2.5 key, as
 /// `r || s`.
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 pub(crate) const P256_SIGNATURE: &str = "409b9927a7f27d61f6d7360b9b91941fa6dd14db553a55d0dd573fc9db7fccb7\
                                          af3a4aaab89c0684256afe5db6aa53e4569286bc2c2f6435fe7563db215b5976";
 

@@ -22,7 +22,9 @@
 //! value gets the decrypting adapter from
 //! [`KmsAeadEnvelope::decrypting_stream`](crate::KmsAeadEnvelope::decrypting_stream) or
 //! [`decrypting_reader`](crate::KmsAeadEnvelope::decrypting_reader), which read the header
-//! themselves.
+//! themselves. A caller that picks the DEK by the header itself, as kms-aead-keyring does, reads the
+//! header off the source with [`StreamHeaderGatherer`] or [`read_stream_header`] and starts the
+//! adapter after it.
 //!
 //! The book's [Streaming encryption](https://kms-aead-rust.abdolence.dev/streaming.html) chapter
 //! walks through these calls, and
@@ -84,16 +86,14 @@ pub(crate) mod tests;
 #[cfg(test)]
 mod vectors;
 
-#[doc(hidden)]
-pub use adapters::__read_header;
-pub use adapters::{decrypt_stream, encrypt_stream, DecryptingReader, EncryptingWriter};
-#[doc(hidden)]
-pub use byte_streams::__HeaderGatherer;
-pub use byte_streams::{DecryptingStream, EncryptingStream};
+pub use adapters::{
+    DecryptingReader, EncryptingWriter, decrypt_stream, encrypt_stream, read_stream_header,
+};
+pub use byte_streams::{DecryptingStream, EncryptingStream, StreamHeaderGatherer};
 pub use header::{EnvelopeStreamHeader, PrefixedStreamHeader};
 pub use layout::{ChunkReadPlan, StreamFormat};
 
-use cipher::{ChunkCipher, Salt, CHUNK_ALGORITHM, STREAM_SALT_LEN};
+use cipher::{CHUNK_ALGORITHM, ChunkCipher, STREAM_SALT_LEN, Salt};
 pub(crate) use header::CobblestoneHeader;
 
 /// The header of the prefixed form: the prefix and the Cobblestone header.
@@ -106,14 +106,6 @@ pub const STREAM_CHUNK_LEN: usize = 16_384;
 pub const STORED_STREAM_CHUNK_LEN: usize = 16_400;
 /// The chunks a value holds at most.
 pub const MAX_STREAM_CHUNKS: u64 = 1 << 38;
-
-/// `STREAM_ALGORITHM` unless `cipher`'s algorithm is AES-256-GCM, the one algorithm of a streamed
-/// value, for kms-aead-keyring to check before it calls the KMS. Not part of the API, so it changes
-/// only in a minor release of kms-aead, which kms-aead-keyring requires to match its own.
-#[doc(hidden)]
-pub fn __check_stream_algorithm<B: AeadBackend>(cipher: &AeadCipher<B>) -> KmsAeadResult<()> {
-    cipher.check_stream_algorithm()
-}
 
 /// Encrypts one value from plaintext given in pieces of any size, without knowing its length in
 /// advance. The value is [`header`](Self::header), then the bytes of every
@@ -256,7 +248,7 @@ impl<B: AeadBackend> StreamEncryptor<B> {
                 return Err(KmsAeadEncryptionError::create(
                     "ENCRYPT",
                     "The encryptor has encrypted its final chunk",
-                ))
+                ));
             }
         };
         let full_chunks = held.saturating_add(plaintext.len()) / STREAM_CHUNK_LEN;
@@ -633,9 +625,14 @@ impl<B: AeadBackend> AeadCipher<B> {
         )
     }
 
-    /// `STREAM_ALGORITHM` unless the cipher's algorithm is AES-256-GCM, the one algorithm of a
-    /// streamed value, for a caller to check before it calls the KMS.
-    pub(crate) fn check_stream_algorithm(&self) -> KmsAeadResult<()> {
+    /// Checks that the cipher's algorithm is AES-256-GCM, the one algorithm of a streamed value.
+    /// The stream encryptors and decryptors check it too; a caller that decrypts the DEK through a
+    /// KMS checks it first, so that a cipher they refuse costs no KMS call.
+    ///
+    /// # Errors
+    ///
+    /// `STREAM_ALGORITHM` when the cipher's algorithm is another.
+    pub fn check_stream_algorithm(&self) -> KmsAeadResult<()> {
         if self.algorithm() == CHUNK_ALGORITHM {
             Ok(())
         } else {

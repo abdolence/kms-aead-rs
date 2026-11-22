@@ -4,9 +4,9 @@ use std::hash::{Hash, Hasher};
 use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
+use crate::KmsAeadResult;
 use crate::errors::*;
 use crate::providers::KmsKeyVersion;
-use crate::KmsAeadResult;
 
 /// A plaintext data encryption key, zeroised on drop and shown as `***` by `Debug`. Equality
 /// compares in constant time.

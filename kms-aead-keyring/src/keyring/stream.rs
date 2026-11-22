@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::Stream;
+use kms_aead::KmsAeadDecryptionProvider;
 use kms_aead::backends::AeadBackend;
 use kms_aead::stream::{
-    __HeaderGatherer, __read_header, DecryptingReader, DecryptingStream, PrefixedStreamHeader,
-    StreamDecryptor, StreamEncryptor, StreamFormat,
+    DecryptingReader, DecryptingStream, PrefixedStreamHeader, StreamDecryptor, StreamEncryptor,
+    StreamFormat, StreamHeaderGatherer, read_stream_header,
 };
-use kms_aead::KmsAeadDecryptionProvider;
 use tokio::io::AsyncRead;
 
 use crate::errors::{InteropRequirement, KeyringError, KeyringResult};
@@ -67,7 +67,7 @@ where
                 ));
             }
             let cipher = keyring.cipher(version)?;
-            kms_aead::stream::__check_stream_algorithm(&cipher)?;
+            cipher.check_stream_algorithm()?;
             let (encryptor, outcome) = keyring
                 .with_cached_dek(&self.record, version.id(), encrypted_dek, |dek| {
                     cipher.stream_encryptor(version.id(), &aad.bytes, dek)
@@ -100,7 +100,7 @@ where
     ///
     /// # Errors
     ///
-    /// - [`KeyringError::ReservedKeyId`] for an ordinal of zero and
+    /// - [`KeyringError::ReservedKeyId`] for a reserved id and
     ///   [`KeyringError::KeyPurposeMismatch`] for an id of another purpose;
     /// - [`KeyringError::KeyVersionUnknown`], also after one reload,
     ///   [`KeyringError::KeyVersionRetired`], [`KeyringError::KeyVersionDestroyed`] and
@@ -131,7 +131,7 @@ where
                     call.version(version);
                     self.apply_read_policy(version, compromise)?;
                     let cipher = self.cipher(version)?;
-                    kms_aead::stream::__check_stream_algorithm(&cipher)?;
+                    cipher.check_stream_algorithm()?;
                     let (decryptor, outcome) = self
                         .with_cached_dek(&record, version.id(), encrypted_dek, |dek| {
                             cipher.stream_decryptor(&aad.bytes, header, dek)
@@ -169,7 +169,7 @@ where
         Src: Stream<Item = Result<Bytes, E>> + Unpin,
         E: Into<Box<dyn Error + Send + Sync>>,
     {
-        let mut stored = __HeaderGatherer::new(stored);
+        let mut stored = StreamHeaderGatherer::new(stored);
         let header = PrefixedStreamHeader::try_from(
             stored.read(StreamFormat::Prefixed.header_len()).await?,
         )?;
@@ -194,7 +194,7 @@ where
         R: AsyncRead + Unpin,
     {
         let mut header = Vec::new();
-        __read_header(
+        read_stream_header(
             &mut stored,
             &mut header,
             StreamFormat::Prefixed.header_len(),
@@ -219,15 +219,15 @@ mod tests {
     use futures::TryStreamExt;
     use tokio::io::AsyncReadExt;
 
-    use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-    use kms_aead::stream::{decrypt_stream, encrypt_stream, StreamFormat, STREAM_CHUNK_LEN};
     use kms_aead::AeadAlgorithm;
+    use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+    use kms_aead::stream::{STREAM_CHUNK_LEN, StreamFormat, decrypt_stream, encrypt_stream};
 
     use super::*;
     use crate::errors::InteropError;
     use crate::test_support::{
-        email_of, error_code_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry,
-        TestResult, TestStore, EMAIL, TENANT,
+        EMAIL, TENANT, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
+        TestStore, email_of, error_code_of,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{

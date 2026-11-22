@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
+use std::sync::Arc;
 
 use der::asn1::UintRef;
 use der::{Decode, Sequence};
@@ -13,6 +14,8 @@ use crate::{KmsAeadResult, KmsProvider};
 /// [`KmsAeadEncryptionProvider`](crate::KmsAeadEncryptionProvider): write each method that
 /// returns a future as an `async fn` whose future is `Send`, and put no key material or signature
 /// bytes in its errors. Signers are generic over their provider: the trait has no `dyn` form.
+/// `Arc<P>` and `&P` implement it for every `P` that does, so that one provider serves many
+/// signers.
 ///
 /// The name carries no `KmsAead` prefix, since the prefix names the crate's AEAD facade and its
 /// errors, and a signing provider is not an AEAD.
@@ -50,11 +53,54 @@ pub trait KmsSigningProvider: Send + Sync {
     fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send;
 }
 
+impl<P: KmsSigningProvider> KmsSigningProvider for Arc<P> {
+    fn signing_key(&self) -> &SigningKeyRef {
+        (**self).signing_key()
+    }
+
+    fn algorithm(&self) -> SigningAlgorithm {
+        (**self).algorithm()
+    }
+
+    fn sign(
+        &self,
+        input: SigningInput<'_>,
+    ) -> impl Future<Output = KmsAeadResult<RawSignature>> + Send {
+        (**self).sign(input)
+    }
+
+    fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send {
+        (**self).verifying_key()
+    }
+}
+
+impl<P: KmsSigningProvider> KmsSigningProvider for &P {
+    fn signing_key(&self) -> &SigningKeyRef {
+        (**self).signing_key()
+    }
+
+    fn algorithm(&self) -> SigningAlgorithm {
+        (**self).algorithm()
+    }
+
+    fn sign(
+        &self,
+        input: SigningInput<'_>,
+    ) -> impl Future<Output = KmsAeadResult<RawSignature>> + Send {
+        (**self).sign(input)
+    }
+
+    fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send {
+        (**self).verifying_key()
+    }
+}
+
 /// What a signing provider is asked to sign, per algorithm.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum SigningInput<'a> {
     /// Ed25519 signs the pre-image as it is.
+    #[non_exhaustive]
     Ed25519 {
         /// The pre-image, 46 to 302 bytes.
         pre_image: &'a [u8],
@@ -62,6 +108,7 @@ pub enum SigningInput<'a> {
     /// ECDSA P-256 with SHA-256: the pre-image and its SHA-256. A KMS takes `digest`. A key pair on
     /// ring or aws-lc-rs takes `pre_image`, since their `sign` hashes its input and would hash a
     /// digest a second time; p256 takes `digest` through `sign_prehash`.
+    #[non_exhaustive]
     EcdsaP256Sha256 {
         /// The pre-image, 46 to 302 bytes.
         pre_image: &'a [u8],
@@ -252,8 +299,7 @@ mod tests {
     const P256_SIGNATURE_S: &str =
         "f1da77f32ca85798256a744107f37ee99015734455067b3d7d3eb841142fbeb8";
     /// The P-256 signature of the book's test vectors, whose `s` takes a leading `0x00`.
-    const P256_SIGNATURE_DER: &str =
-        "304502204c3ea9da3b6bddbbd0baec3c94f0cb50e295d017c25b444a97a10dc3119a2e1b\
+    const P256_SIGNATURE_DER: &str = "304502204c3ea9da3b6bddbbd0baec3c94f0cb50e295d017c25b444a97a10dc3119a2e1b\
                        022100f1da77f32ca85798256a744107f37ee99015734455067b3d7d3eb841142fbeb8";
 
     #[test]
@@ -317,9 +363,11 @@ mod tests {
             matches!(&refused, Err(error) if error.code() == "SIGNING_ALGORITHM_MISMATCH"),
             "{refused:?}"
         );
-        assert!(ed25519
-            .ensure_algorithm(&signing_key, SigningAlgorithm::Ed25519)
-            .is_ok());
+        assert!(
+            ed25519
+                .ensure_algorithm(&signing_key, SigningAlgorithm::Ed25519)
+                .is_ok()
+        );
     }
 
     #[test]

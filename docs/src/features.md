@@ -31,7 +31,6 @@ The crate has no default features.
 | `rustcrypto` | the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds `p256` and `ed25519-dalek` for signatures, and `rsa` for RSA-OAEP, see [Asymmetric KEKs](./asymmetric-kek.md#what-each-backend-does) |
 | `deterministic` | deterministic encryption with AES-SIV, see [Deterministic encryption](./deterministic.md) |
 | `stream` | streaming encryption of values of any length, see the notes below. Turns on tokio's `io-util` and brings in `bytes` and `futures-core` |
-| `legacy-formats` | reads the legacy envelope and DEK layouts. Deprecated, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier) |
 | `postgres` | `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for tokio-postgres |
 | `sqlx` | sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS stack |
 | `opentelemetry` | OpenTelemetry metrics on the API crate only (no SDK), see the notes below and [Metrics](./observability/metrics.md#metrics) |

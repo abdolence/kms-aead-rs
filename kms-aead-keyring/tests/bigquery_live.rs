@@ -5,9 +5,9 @@
 //! `bigquery.jobs.create` in the project.
 
 use bigquery::{BigQueryDb, BigQueryFieldType, BigQueryLocation};
+use kms_aead::DeterministicAlgorithm;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::DeterministicAlgorithm;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringAdmin,

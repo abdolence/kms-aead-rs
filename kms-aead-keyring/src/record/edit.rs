@@ -117,6 +117,8 @@ impl KeyringRecord {
             updated_at: now,
             signature: None,
             canonical_digest: [0; 32],
+            #[cfg(feature = "admin")]
+            unknown_members: false,
         }
     }
 
@@ -461,7 +463,7 @@ impl RecordEdit {
                 return Err(KeyringError::record_invalid(
                     &self.record.id,
                     RecordInvalidReason::MissingMaterial(key_id),
-                ))
+                ));
             }
         }
         self.record.updated_at = now;

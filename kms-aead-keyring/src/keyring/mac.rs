@@ -236,7 +236,7 @@ mod tests {
 
     use super::*;
     use crate::errors::KeyVersionError;
-    use crate::test_support::{TestAdmin, TestProvider, TestRegistry, TestResult, TENANT};
+    use crate::test_support::{TENANT, TestAdmin, TestProvider, TestRegistry, TestResult};
     use crate::testing::MemoryKeyringStore;
     use crate::{KeyAlgorithm, KeyringAlgorithms, KeyringRegistryOptions, MacAlgorithm};
 
@@ -253,8 +253,8 @@ mod tests {
             Ok(self.0.clone())
         }
 
-        fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
-            Ok(Invoice(payload))
+        fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
+            Ok(Invoice(payload.to_vec()))
         }
     }
 

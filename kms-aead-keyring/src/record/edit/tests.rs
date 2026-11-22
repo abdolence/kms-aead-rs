@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::*;
 use crate::errors::RecordInvalidError;
-use crate::record::tests::{document, parse, rotated, version, COMPROMISED, ENCRYPTED_DEK};
+use crate::record::tests::{COMPROMISED, ENCRYPTED_DEK, document, parse, rotated, version};
 use crate::test_support::TestResult;
 
 /// The operations a version can be asked for, by the transition each one is.

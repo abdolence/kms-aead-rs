@@ -1,11 +1,11 @@
 use ::ring::aead::{
-    Aad, Algorithm, LessSafeKey, Nonce as AeadNonce, UnboundKey, AES_128_GCM, AES_256_GCM,
-    CHACHA20_POLY1305,
+    AES_128_GCM, AES_256_GCM, Aad, Algorithm, CHACHA20_POLY1305, LessSafeKey, Nonce as AeadNonce,
+    UnboundKey,
 };
 use ::ring::rand::{SecureRandom, SystemRandom};
 use ::ring::signature::{
-    EcdsaKeyPair, Ed25519KeyPair, KeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED,
-    ECDSA_P256_SHA256_FIXED_SIGNING, ED25519,
+    ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, ED25519, EcdsaKeyPair,
+    Ed25519KeyPair, KeyPair, UnparsedPublicKey,
 };
 use ::ring::{agreement, digest, hmac};
 use secret_vault_value::SecretValue;

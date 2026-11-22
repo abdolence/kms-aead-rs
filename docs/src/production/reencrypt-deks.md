@@ -145,9 +145,8 @@ value, and the checks of steps 3 and 6 find it if its DEK is still under the old
 values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
 each on a cache miss afterwards. The same `reencrypt_encrypted_dek` re-encrypts the DEKs stored
 apart from their values, such as those of the `*_with_encrypted_dek` calls, of beacons and of
-deterministic fields. A value or a DEK in a legacy layout fails with `LEGACY_FORMAT`:
-`upgrade_legacy_value` and `upgrade_legacy_encrypted_dek` rewrite it in Tink's format, with its DEK
-under the current version, see [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values).
+deterministic fields. A value or a DEK in a legacy layout fails with `LEGACY_FORMAT`, see
+[Values written by 0.29 and earlier](../migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The DEK cache plays no part: the sweep decrypts through the provider and leaves the cache as it is,
 so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the

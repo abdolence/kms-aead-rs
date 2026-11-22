@@ -137,7 +137,7 @@ impl<P: KmsSigningProvider, B: AeadBackend> Signer<P, B> {
         payload_type: SignedPayloadType,
         operation: impl std::future::Future<Output = KmsAeadResult<R>>,
     ) -> KmsAeadResult<R> {
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: operation_name,
             mode: "signature",
             backend: B::NAME,

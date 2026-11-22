@@ -247,7 +247,7 @@ impl<B: AeadBackend> Authenticator<B> {
             || {
                 let payload = with_mac.unverified_payload();
                 self.check(payload, T::PAYLOAD_TYPE, with_mac.tag(), key)?;
-                T::from_payload(payload.to_vec())
+                T::from_payload(payload)
             },
         )
     }
@@ -261,7 +261,7 @@ impl<B: AeadBackend> Authenticator<B> {
         payload_type: SignedPayloadType,
         operation: impl FnOnce() -> KmsAeadResult<R>,
     ) -> KmsAeadResult<R> {
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: operation_name,
             mode: "caller_dek",
             backend: B::NAME,
@@ -333,7 +333,7 @@ impl<B: AeadBackend> Authenticator<B> {
 mod tests {
     use super::*;
     use crate::test_provider::{
-        error_code_of, Invoice, TestBackend, INVOICE_PAYLOAD, OTHER_INVOICE_PAYLOAD,
+        INVOICE_PAYLOAD, Invoice, OTHER_INVOICE_PAYLOAD, TestBackend, error_code_of,
     };
 
     const KEY_ID: KeyId = KeyId::new(3_221_225_473);

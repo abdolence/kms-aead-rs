@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use secret_vault_value::SecretValue;
 
-use super::{StreamDecryptor, MAX_STREAM_CHUNKS, STORED_STREAM_CHUNK_LEN};
+use super::{MAX_STREAM_CHUNKS, STORED_STREAM_CHUNK_LEN, StreamDecryptor};
+use crate::AeadAlgorithm;
 use crate::backends::{AeadBackend, Failure};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::AeadAlgorithm;
 
 /// The chunks of one value, one at a time: the stored bytes of the chunk in progress are gathered
 /// from a source into a buffer of [`STORED_STREAM_CHUNK_LEN`] bytes and decrypted there in place.

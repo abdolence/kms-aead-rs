@@ -2,8 +2,8 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 
 use super::LocalKekVersion;
-use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::KmsAeadResult;
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 
 /// The version of a KMS key: of the KEK that encrypted a data encryption key, the KEK version, or
 /// of a signing key. 1 to 255 ASCII alphanumeric characters, such as the version of an Azure Key

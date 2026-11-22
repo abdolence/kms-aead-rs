@@ -19,9 +19,9 @@ use kms_aead::{AeadAlgorithm, KmsAeadDecryptionProvider};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, Encrypted, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop,
-    KeyId, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
-    KeysetSelection, Purpose,
+    Encrypted, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId,
+    KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeysetSelection, Purpose, encodings,
 };
 use serde_json::json;
 

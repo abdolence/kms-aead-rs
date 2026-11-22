@@ -1,20 +1,27 @@
 //! The OpenTelemetry metrics of kms-aead and kms-aead-keyring, of the `opentelemetry` feature.
 //! Dashboards and alerts depend on the names, units and attributes of the instruments, so they
 //! change only in a breaking release. The names follow OpenTelemetry's semantic conventions: the
-//! library's own attributes are under `kms_aead.`, and a failed call carries `error.type`.
-//!
-//! Without the feature a [`Measurement`] records nothing and reads no clock.
+//! library's own attributes are under `kms_aead.`, and a failed call carries `error.type`. The
+//! book's [Metrics](https://kms-aead-rust.abdolence.dev/observability/metrics.html) page lists
+//! them.
 //!
 //! The instruments come from the global meter provider the first time either crate records one,
 //! and stay bound to that provider: an application installs its provider before that call, or
 //! the instruments record nothing for the life of the process. No attribute carries plaintext,
 //! AAD, cipher text or key material, only identifiers; a length is recorded only as the plaintext
 //! size of a value.
+//!
+//! kms-aead records its own calls. The functions here record the calls of a crate built on it,
+//! kms-aead-keyring among them, into the same instruments and instrumentation scope, so that an
+//! application reads the metrics of both from one scope. The attributes such a crate adds carry
+//! identifiers only, as the library's own do.
 
 #[cfg(feature = "opentelemetry")]
-pub(crate) use instruments::{record_kms_call, Measurement};
+pub(crate) use instruments::{Measurement, record_kms_call};
+#[cfg(feature = "opentelemetry")]
+pub use instruments::{OperationOutcome, count_keyring_record_refusal, record_keyring_store_load};
 #[cfg(not(feature = "opentelemetry"))]
-pub(crate) use unrecorded::{record_kms_call, Measurement};
+pub(crate) use unrecorded::{Measurement, record_kms_call};
 
 /// The attributes every call of either crate carries: `kms_aead.operation`, `kms_aead.mode`,
 /// `kms_aead.backend` and, when the call knows it, `kms_aead.algorithm`.
@@ -25,11 +32,12 @@ pub(crate) use unrecorded::{record_kms_call, Measurement};
         reason = "only the `opentelemetry` feature records the attributes"
     )
 )]
-pub struct Call {
-    /// `encrypt`, `decrypt`, `reencrypt`, `beacon`, `probe`, `generate_dek`, `reencrypt_dek`,
-    /// `stream_encrypt` or `stream_decrypt`.
+pub struct OperationAttributes {
+    /// `encrypt`, `decrypt`, `reencrypt`, `beacon`, `probe`, `generate_dek`, `decrypt_dek`,
+    /// `reencrypt_dek`, `stream_encrypt`, `stream_decrypt`, `sign`, `verify`, `mac` or
+    /// `verify_mac`.
     pub operation: &'static str,
-    /// `per_call`, `store_less`, `caller_dek` or `keyring`.
+    /// `per_call`, `store_less`, `caller_dek`, `keyring` or `signature`.
     pub mode: &'static str,
     /// The [`AeadBackend::NAME`](crate::backends::AeadBackend::NAME) the call runs on.
     pub backend: &'static str,
@@ -37,19 +45,16 @@ pub struct Call {
     pub algorithm: Option<&'static str>,
 }
 
-/// The instruments, shared with kms-aead-keyring so that both crates record into one set. Not part
-/// of the public API, so it changes only in a minor release of kms-aead, which kms-aead-keyring
-/// requires to match its own. The names, units and attributes are public, and the book documents
-/// them.
+/// The instruments, which both crates record into.
 #[cfg(feature = "opentelemetry")]
-pub mod instruments {
+mod instruments {
     use std::sync::LazyLock;
     use std::time::{Duration, Instant};
 
     use opentelemetry::metrics::{Counter, Histogram};
     use opentelemetry::{InstrumentationScope, KeyValue};
 
-    pub use super::Call;
+    use super::OperationAttributes;
     use crate::formats::Format;
     use crate::{Encrypted, KeyId, KmsAeadResult, KmsProvider};
 
@@ -127,9 +132,12 @@ pub mod instruments {
         }
     });
 
-    /// How a call ended, as its metrics record it.
-    pub enum Outcome<'a> {
-        /// It encrypted or decrypted one value.
+    /// How a call ended, as [`OperationAttributes::record`] records it.
+    #[non_exhaustive]
+    pub enum OperationOutcome<'a> {
+        /// It encrypted or decrypted one value. Only [`value`](Self::value) builds it, so that the
+        /// size recorded is the plaintext size of a value the call read or wrote.
+        #[non_exhaustive]
         Value {
             /// The length of the value's plaintext, in bytes.
             plaintext_len: usize,
@@ -145,69 +153,74 @@ pub mod instruments {
         },
     }
 
-    impl Outcome<'_> {
+    impl OperationOutcome<'_> {
         /// A call that encrypted or decrypted `value`, under the keyring version `key_id` for a
         /// keyring call.
         pub fn value<T, F: Format>(value: &Encrypted<T, F>, key_id: Option<KeyId>) -> Self {
-            Outcome::Value {
+            OperationOutcome::Value {
                 plaintext_len: F::plaintext_len(value.value()),
                 key_id,
             }
         }
     }
 
-    /// Records one call with `call`'s attributes and `extra`, the caller's own, that took
-    /// `elapsed` and ended with `outcome`. A value is recorded in `kms_aead.plaintext.size` with
-    /// the duration's attributes and `kms_aead.key_id`.
-    pub fn record_operation(
-        call: &Call,
-        extra: impl IntoIterator<Item = KeyValue>,
-        elapsed: Duration,
-        outcome: Outcome<'_>,
-    ) {
-        let mut attributes = Vec::with_capacity(8);
-        attributes.extend([
-            KeyValue::new(OPERATION, call.operation),
-            KeyValue::new(MODE, call.mode),
-            KeyValue::new(BACKEND, call.backend),
-        ]);
-        attributes.extend(
-            call.algorithm
-                .map(|algorithm| KeyValue::new(ALGORITHM, algorithm)),
-        );
-        attributes.extend(extra);
-        let instruments = &*INSTRUMENTS;
-        match outcome {
-            Outcome::Value {
-                plaintext_len,
-                key_id,
-            } => {
-                instruments
+    impl OperationAttributes {
+        /// Records one call that took `elapsed` and ended with `outcome`: its duration in
+        /// `kms_aead.operation.duration`, with these attributes, `extra`, the caller's own, and
+        /// `error.type` for a failure, and for a value its plaintext size in
+        /// `kms_aead.plaintext.size`, with the same attributes and `kms_aead.key_id`.
+        pub fn record(
+            &self,
+            extra: impl IntoIterator<Item = KeyValue>,
+            elapsed: Duration,
+            outcome: OperationOutcome<'_>,
+        ) {
+            let mut attributes = Vec::with_capacity(8);
+            attributes.extend([
+                KeyValue::new(OPERATION, self.operation),
+                KeyValue::new(MODE, self.mode),
+                KeyValue::new(BACKEND, self.backend),
+            ]);
+            attributes.extend(
+                self.algorithm
+                    .map(|algorithm| KeyValue::new(ALGORITHM, algorithm)),
+            );
+            attributes.extend(extra);
+            let instruments = &*INSTRUMENTS;
+            match outcome {
+                OperationOutcome::Value {
+                    plaintext_len,
+                    key_id,
+                } => {
+                    instruments
+                        .operation_duration
+                        .record(elapsed.as_secs_f64(), &attributes);
+                    // OpenTelemetry has integer attributes in `i64` only.
+                    attributes.extend(
+                        key_id.map(|key_id| KeyValue::new(KEY_ID, i64::from(key_id.as_u32()))),
+                    );
+                    instruments.plaintext_size.record(
+                        u64::try_from(plaintext_len).unwrap_or(u64::MAX),
+                        &attributes,
+                    );
+                }
+                OperationOutcome::Succeeded => instruments
                     .operation_duration
-                    .record(elapsed.as_secs_f64(), &attributes);
-                // OpenTelemetry has integer attributes in `i64` only.
-                attributes
-                    .extend(key_id.map(|key_id| KeyValue::new(KEY_ID, i64::from(key_id.as_u32()))));
-                instruments.plaintext_size.record(
-                    u64::try_from(plaintext_len).unwrap_or(u64::MAX),
-                    &attributes,
-                );
-            }
-            Outcome::Succeeded => instruments
-                .operation_duration
-                .record(elapsed.as_secs_f64(), &attributes),
-            Outcome::Failed { error_type } => {
-                attributes.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
-                instruments
-                    .operation_duration
-                    .record(elapsed.as_secs_f64(), &attributes);
+                    .record(elapsed.as_secs_f64(), &attributes),
+                OperationOutcome::Failed { error_type } => {
+                    attributes.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
+                    instruments
+                        .operation_duration
+                        .record(elapsed.as_secs_f64(), &attributes);
+                }
             }
         }
     }
 
-    /// Records one read of a keyring record with `attributes` that took `elapsed` and, for a
-    /// failed read, its error code `error_type`.
-    pub fn record_store_load(
+    /// Records one read of a keyring record from its store, for kms-aead-keyring: the read's
+    /// duration `elapsed` in `kms_aead.store.duration`, with `attributes` and, for a failed read,
+    /// `error.type` set to its error code `error_type`.
+    pub fn record_keyring_store_load(
         attributes: impl IntoIterator<Item = KeyValue>,
         elapsed: Duration,
         error_type: Option<&str>,
@@ -221,9 +234,13 @@ pub mod instruments {
             .record(elapsed.as_secs_f64(), &attributes);
     }
 
-    /// Counts one keyring record refused because of its signature, with `attributes` and the
-    /// refusal's code `error_type`.
-    pub fn record_refusal(attributes: impl IntoIterator<Item = KeyValue>, error_type: &str) {
+    /// Counts one keyring record that a process refused because of its signature, for
+    /// kms-aead-keyring: one in `kms_aead.record.refusals`, with `attributes` and `error.type` set
+    /// to the refusal's code `error_type`.
+    pub fn count_keyring_record_refusal(
+        attributes: impl IntoIterator<Item = KeyValue>,
+        error_type: &str,
+    ) {
         let attributes = attributes
             .into_iter()
             .chain([KeyValue::new(ERROR_TYPE, error_type.to_owned())])
@@ -263,12 +280,12 @@ pub mod instruments {
 
     /// One call of the envelope, from its start.
     pub(crate) struct Measurement {
-        call: Call,
+        call: OperationAttributes,
         started: Instant,
     }
 
     impl Measurement {
-        pub(crate) fn start(call: Call) -> Self {
+        pub(crate) fn start(call: OperationAttributes) -> Self {
             Self {
                 call,
                 started: Instant::now(),
@@ -277,7 +294,7 @@ pub mod instruments {
 
         /// Records the call as ended with `result`, the value it encrypted.
         pub(crate) fn encrypted<T, F: Format>(self, result: &KmsAeadResult<Encrypted<T, F>>) {
-            self.finish(result, |encrypted| Outcome::value(encrypted, None));
+            self.finish(result, |encrypted| OperationOutcome::value(encrypted, None));
         }
 
         /// Records the call as ended with `result`, the decryption of `value`.
@@ -286,27 +303,27 @@ pub mod instruments {
             value: &Encrypted<T, F>,
             result: &KmsAeadResult<R>,
         ) {
-            self.finish(result, |_| Outcome::value(value, None));
+            self.finish(result, |_| OperationOutcome::value(value, None));
         }
 
         /// Records the call as ended with `result`, which holds no value to count.
         pub(crate) fn finished<R>(self, result: &KmsAeadResult<R>) {
-            self.finish(result, |_| Outcome::Succeeded);
+            self.finish(result, |_| OperationOutcome::Succeeded);
         }
 
         fn finish<'a, R>(
             self,
             result: &'a KmsAeadResult<R>,
-            succeeded: impl FnOnce(&'a R) -> Outcome<'a>,
+            succeeded: impl FnOnce(&'a R) -> OperationOutcome<'a>,
         ) {
             let elapsed = self.started.elapsed();
             let outcome = match result {
                 Ok(value) => succeeded(value),
-                Err(error) => Outcome::Failed {
+                Err(error) => OperationOutcome::Failed {
                     error_type: error.code(),
                 },
             };
-            record_operation(&self.call, [], elapsed, outcome);
+            self.call.record([], elapsed, outcome);
         }
     }
 }
@@ -316,7 +333,7 @@ pub mod instruments {
 mod unrecorded {
     use std::time::Duration;
 
-    use super::Call;
+    use super::OperationAttributes;
     use crate::formats::Format;
     use crate::{Encrypted, KmsAeadResult, KmsProvider};
 
@@ -331,7 +348,7 @@ mod unrecorded {
     pub(crate) struct Measurement;
 
     impl Measurement {
-        pub(crate) fn start(_: Call) -> Self {
+        pub(crate) fn start(_: OperationAttributes) -> Self {
             Self
         }
 

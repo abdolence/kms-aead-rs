@@ -80,6 +80,10 @@ application.open(local_kek()?, TENANT).await?;
 A new keyring is signed from its first write with `create_signed` or `open_or_create_signed`. The
 administration re-signs the record on every write it makes: `rotate`, `promote`,
 `dangerously_shred()` and the rest need the signer's KMS right, `cloudkms.cryptoKeyVersions.useToSign` on Cloud KMS.
+Under `Required`, a registry writes no record without a signer: `create`, `open_or_create` where it
+would create the record, and every write of an administration without a signer fail with
+`RECORD_SIGNER_MISSING` before any KMS call or store write. `open_or_create` reads the store once
+first, and refuses only when that read finds no record.
 
 ## Rotate the signing key
 
@@ -112,9 +116,10 @@ Keep backups and the store's version history to compare against, see
 
 ## Stop signing
 
-Switch every reader to `VerifyIfSigned`, write the record unsigned with
-`dangerously_unsign_record` on an administration without a signer, then restart the readers: the
-running ones refuse the unsigned record until they do.
+Switch every reader to `VerifyIfSigned`, the administration's registry included, write the record
+unsigned with `dangerously_unsign_record` on an administration without a signer, then restart the
+readers: the running ones refuse the unsigned record until they do. Under `Required`,
+`dangerously_unsign_record` fails with `RECORD_SIGNER_MISSING`.
 
 ## What to watch for
 
@@ -122,7 +127,8 @@ running ones refuse the unsigned record until they do.
   administration only, and read its audit log;
 - a keyring under an asymmetric KEK runs with `Required` on every application before the first DEK
   a public key encrypts, see [Accept data from partners and devices that cannot read it back](../use-cases/write-only-producers.md);
-- an administration without a signer is refused over a signed record with `RECORD_SIGNER_MISSING`.
+- an administration without a signer is refused over a signed record with `RECORD_SIGNER_MISSING`,
+  and under `Required` it writes nothing.
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/record_signing.rs).

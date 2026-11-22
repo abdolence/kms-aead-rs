@@ -178,8 +178,9 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 # }
 ```
 
-`AzureKmsSigningProvider::with_client_options` takes the settings of the Azure SDK, such as a
-custom HTTP transport or retry policy. Creating the provider sends no request and fails with
+`AzureKmsSigningProvider::with_options` takes `AzureKmsSigningProviderOptions`, whose
+`client_options` are the settings of the Azure SDK, such as a custom HTTP transport or retry
+policy, as `AzureKmsProviderOptions` has them. Creating the provider sends no request and fails with
 `AZURE_KEY_NAME` or `AZURE_VAULT_URL` as `AzureKmsProvider` does; `Signer::new` sends the first
 request.
 

@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use gcloud_sdk::google::cloud::kms::v1::crypto_key_version::CryptoKeyVersionAlgorithm;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
 use gcloud_sdk::google::cloud::kms::v1::{
-    digest, AsymmetricSignRequest, AsymmetricSignResponse, Digest, GetPublicKeyRequest, PublicKey,
+    AsymmetricSignRequest, AsymmetricSignResponse, Digest, GetPublicKeyRequest, PublicKey, digest,
 };
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
 use rsb_derive::Builder;
@@ -19,6 +19,7 @@ use crate::{KmsAeadResult, KmsProvider};
 
 /// A Google Cloud KMS CryptoKeyVersion that signs.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct GcpKmsSigningKeyRef {
     /// The project that holds the key ring.
     pub google_project_id: String,
@@ -266,8 +267,8 @@ mod tests {
     use super::*;
     use crate::signing::{Signer, Verifier, VerifyingKeySet};
     use crate::test_provider::{
-        assert_code, verifying_key_of, Invoice, TestBackend, ED25519_PKCS8_DER, INVOICE_PAYLOAD,
-        P256_PKCS8_DER, P256_SIGNATURE, P256_SIGNATURE_DER,
+        ED25519_PKCS8_DER, INVOICE_PAYLOAD, Invoice, P256_PKCS8_DER, P256_SIGNATURE,
+        P256_SIGNATURE_DER, TestBackend, assert_code, verifying_key_of,
     };
     use gcloud_sdk::tonic::{Code, Status};
 
@@ -322,8 +323,8 @@ mod tests {
     }
 
     #[test]
-    fn ed25519_sends_the_pre_image_and_p256_sends_the_digest_each_with_its_checksum(
-    ) -> KmsAeadResult<()> {
+    fn ed25519_sends_the_pre_image_and_p256_sends_the_digest_each_with_its_checksum()
+    -> KmsAeadResult<()> {
         let ed25519 = sign_request(VERSION_NAME, &ed25519_input())?;
         let p256 = sign_request(VERSION_NAME, &p256_input())?;
 
@@ -565,8 +566,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(not(feature = "ci-gcp"), ignore)]
-    async fn live_public_key_response_names_the_configured_version_and_is_the_verifying_key(
-    ) -> KmsAeadResult<()> {
+    async fn live_public_key_response_names_the_configured_version_and_is_the_verifying_key()
+    -> KmsAeadResult<()> {
         for algorithm in [SigningAlgorithm::Ed25519, SigningAlgorithm::EcdsaP256Sha256] {
             let key_ref = live_key_ref(algorithm);
             let name = key_ref.to_google_ref();

@@ -342,7 +342,7 @@ mod tests {
 
     use crate::errors::InteropRequirement;
     use crate::test_support::{
-        email_of, TestAdmin, TestProvider, TestRegistry, TestResult, TENANT,
+        TENANT, TestAdmin, TestProvider, TestRegistry, TestResult, email_of,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{

@@ -8,7 +8,9 @@ use secret_vault_value::SecretValue;
 
 use super::local_key_source::{read_local_key_env, read_local_key_file};
 use crate::backends::AeadBackend;
-use crate::errors::{KmsAeadError, KmsAeadSignatureError, KmsAeadSystemError};
+use crate::errors::{
+    KmsAeadEncryptionError, KmsAeadError, KmsAeadSignatureError, KmsAeadSystemError,
+};
 use crate::formats::PrivateKeyFormat;
 use crate::signing::private_key::Pkcs8SigningKey;
 use crate::signing::{
@@ -152,13 +154,23 @@ impl LocalSigningKey {
         let content = read_local_key_env(variable, &origin).map_err(|error| {
             error.into_error("LOCAL_SIGNING_KEY_SOURCE", "LOCAL_SIGNING_KEY_SOURCE")
         })?;
+        Self::from_env_text(version, content, format, &origin)
+    }
+
+    /// The key an environment variable holding `content` gives, read from `origin`.
+    fn from_env_text(
+        version: LocalSigningKeyVersion,
+        content: SecretValue,
+        format: PrivateKeyFormat,
+        origin: &str,
+    ) -> KmsAeadResult<Self> {
         let content = format.decode_env_text(content).ok_or_else(|| {
             KmsAeadSystemError::create(
                 "LOCAL_SIGNING_KEY_SOURCE",
                 &format!("{origin} does not hold standard base64"),
             )
         })?;
-        Self::decode(version, content, format, "env", &origin)
+        Self::decode(version, content, format, "env", origin)
     }
 
     /// The key `content` holds in `format`, read from `origin`.
@@ -188,7 +200,7 @@ impl LocalSigningKey {
                 derived
             }
             (SigningAlgorithm::EcdsaP256Sha256, None) => {
-                return Err(invalid("holds a P-256 key without its public point"))
+                return Err(invalid("holds a P-256 key without its public point"));
             }
         };
         let verifying_key = VerifyingKey::from_raw(key.algorithm, public_key)
@@ -376,7 +388,7 @@ impl<B: AeadBackend> LocalSigningProvider<B> {
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn ephemeral(id: LocalSigningKeyName, algorithm: SigningAlgorithm) -> KmsAeadResult<Self> {
         let (private_key, public_key) = B::generate_signing_key(algorithm).map_err(|_| {
-            KmsAeadSystemError::create(
+            KmsAeadEncryptionError::create(
                 "RANDOM_GENERATOR",
                 &format!("Unable to generate a {algorithm} key"),
             )
@@ -480,7 +492,7 @@ mod tests {
     use super::*;
     use crate::signing::{Signer, Verifier};
     use crate::test_provider::{
-        renderings, Invoice, TestBackend, ED25519_PKCS8_DER, INVOICE_PAYLOAD, P256_PKCS8_DER,
+        ED25519_PKCS8_DER, INVOICE_PAYLOAD, Invoice, P256_PKCS8_DER, TestBackend, renderings,
     };
 
     const INVOICES: &str = "invoices";
@@ -541,11 +553,6 @@ mod tests {
                 pkcs8_der_secret(pkcs8_der),
                 PrivateKeyFormat::Pkcs8Der,
             )?;
-            let variable = format!("KMS_AEAD_LOCAL_SIGNING_TEST_{}", &pkcs8_der[..8]);
-            std::env::set_var(
-                &variable,
-                SecretValue::new(hex::decode(pkcs8_der).unwrap()).as_sensitive_base64_str(),
-            );
             let keys = [
                 LocalSigningKey::from_secret(
                     local_signing_key_version(1),
@@ -562,13 +569,23 @@ mod tests {
                     &dir.file("pem", pkcs8_pem(pkcs8_der)),
                     PrivateKeyFormat::Pkcs8Pem,
                 )?,
-                LocalSigningKey::from_env(
+                LocalSigningKey::from_env_text(
                     local_signing_key_version(1),
-                    &variable,
+                    SecretValue::from(
+                        pkcs8_der_secret(pkcs8_der)
+                            .as_sensitive_base64_str()
+                            .as_str(),
+                    ),
                     PrivateKeyFormat::Pkcs8Der,
+                    "the environment variable",
+                )?,
+                LocalSigningKey::from_env_text(
+                    local_signing_key_version(1),
+                    SecretValue::from(pkcs8_pem(pkcs8_der)),
+                    PrivateKeyFormat::Pkcs8Pem,
+                    "the environment variable",
                 )?,
             ];
-            std::env::remove_var(&variable);
 
             for key in keys {
                 assert_eq!(key.verifying_key(), expected.verifying_key(), "{key:?}");
@@ -612,7 +629,6 @@ mod tests {
     #[test]
     fn a_source_that_cannot_be_read_is_refused() {
         let dir = TestDir::new("sources");
-        std::env::set_var("KMS_AEAD_LOCAL_SIGNING_TEST_NOT_BASE64", "not base64!");
         let large = dir.file("large", vec![0x30; LOCAL_KEY_MAX_LEN_PLUS_ONE]);
         for result in [
             LocalSigningKey::from_file(
@@ -635,10 +651,11 @@ mod tests {
                 "KMS_AEAD_LOCAL_SIGNING_TEST_UNSET",
                 PrivateKeyFormat::Pkcs8Pem,
             ),
-            LocalSigningKey::from_env(
+            LocalSigningKey::from_env_text(
                 local_signing_key_version(1),
-                "KMS_AEAD_LOCAL_SIGNING_TEST_NOT_BASE64",
+                SecretValue::from("not base64!"),
                 PrivateKeyFormat::Pkcs8Der,
+                "the environment variable",
             ),
         ] {
             assert!(
@@ -646,7 +663,6 @@ mod tests {
                 "{result:?}"
             );
         }
-        std::env::remove_var("KMS_AEAD_LOCAL_SIGNING_TEST_NOT_BASE64");
     }
 
     const LOCAL_KEY_MAX_LEN_PLUS_ONE: usize =

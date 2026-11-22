@@ -34,17 +34,16 @@ algorithm, and a value Tink encrypts decrypts with `KmsAeadEnvelope::decrypt`.
 | [Attached MAC](./formats/signatures-and-macs.md) | `WithMac<T>` | `[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]` | kms-aead, and kms-aead-keyring for its MAC versions | current |
 | [Tink keyset](./formats/keyring-records.md#tink-keysets-and-the-tink-prefix) | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery; kms-aead-keyring writes it too | current |
 | [Tink encrypted keyset](./formats/keyring-records.md#tink-keysets-and-the-tink-prefix) | `TinkKeyset::into_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][encrypted keyset: w]` | Tink with a GCP, AWS or Vault Transit key; kms-aead-keyring writes it too | current |
-| Envelope layout v1 | `Encrypted<T, Envelope>` with `legacy-formats` | `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]` | kms-aead with `legacy-formats` | legacy |
-| Encrypted DEK layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][encrypted DEK]` | kms-aead with `legacy-formats` | legacy |
-| Length-prefixed envelope | `Encrypted<T, Envelope>` with `legacy-formats` | `[w: u64 BE][encrypted DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets in early releases | kms-aead with `legacy-formats` | legacy |
-| Raw encrypted DEK | `EncryptedDataEncryptionKey` | the KMS ciphertext of the DEK's 16 or 32 raw bytes | kms-aead with `legacy-formats` | legacy, except under Azure, which still writes it |
+| Envelope layout v1 | none | `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]` | kms-aead 0.33 and earlier | legacy |
+| Encrypted DEK layout v1 | none | `[0xFF][0x01][k: u8][key version: k][encrypted DEK]` | kms-aead 0.33 and earlier | legacy |
+| Length-prefixed envelope | none | `[w: u64 BE][encrypted DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets in early releases | kms-aead 0.33 and earlier | legacy |
+| Raw encrypted DEK | `EncryptedDataEncryptionKey` | the KMS ciphertext of the DEK's 16 or 32 raw bytes | kms-aead 0.33 and earlier, and kms-aead under Azure | legacy, except under Azure, which still writes it |
 
 `k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
 provider encrypts the raw DEK, see [Encrypted DEKs](./formats/values.md#encrypted-deks).
 
-The legacy layouts are read only with the deprecated `legacy-formats` feature. The reading rules and
-the upgrade of stored values are in
-[Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier).
+The library refuses the legacy layouts with `LEGACY_FORMAT`. How kms-aead 0.33 rewrites stored
+values in them is in [Migrating from 0.29](./migrating-from-0.29.md#old-values).
 
 ## Telling layouts apart
 
@@ -77,6 +76,5 @@ A column that holds two layouts:
 - envelope streamed values and Tink envelopes: both start with `[w][encrypted DEK]`, so the
   layout is recorded outside the value, as for bare values;
 - legacy encrypted DEKs of layout v1 and current ones: `0xFF 0x01` starts no encrypted DEK of a
-  built-in provider, so the library tells them apart for those. It never inspects the bytes of an
-  application's own provider: strip the header `[0xFF][0x01][k][key version]` of its legacy keys
-  before reading them.
+  built-in provider, so the library tells them apart for those and refuses the legacy ones before
+  the KMS call. It never inspects the bytes of an application's own provider.

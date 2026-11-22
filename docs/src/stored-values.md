@@ -40,7 +40,8 @@ Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
 
 See [Formats of `Encrypted`](./formats/values.md#formats-of-encrypted) for the layout and the shortest
 value of each format, and [Values written by 0.29 and
-earlier](./migrating-from-0.29.md#values-written-by-029-and-earlier) for the legacy layouts.
+earlier](./migrating-from-0.29.md#values-written-by-029-and-earlier) for the legacy layouts, which
+the library refuses.
 
 ### Bytes in and out
 
@@ -49,8 +50,8 @@ lowercase hex. The only ways back are `Encrypted::try_from` for bytes and
 `Encrypted::try_from_hex_string` for hex in either case. Both check the bytes against the layout
 of `F` before any KMS call, so a truncated or foreign value fails when it is read, with
 `INVALID_CIPHER_TEXT_FORMAT`, `UNKNOWN_CIPHER_TEXT_LAYOUT`, `INVALID_HEX`, or `LEGACY_FORMAT` for
-a legacy layout without the `legacy-formats` feature. The check reads the framing only: a changed
-value fails to decrypt with `DECRYPT`.
+a legacy layout. The check reads the framing only: a changed value fails to decrypt with
+`DECRYPT`.
 
 ```rust
 use kms_aead::backends::Ring;

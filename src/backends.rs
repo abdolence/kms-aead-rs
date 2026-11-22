@@ -315,7 +315,7 @@ pub(crate) trait AeadBackendOps {
     /// A new key pair of `algorithm` from the backend's CSPRNG: the Ed25519 seed or the P-256
     /// scalar, and the raw public key.
     fn generate_signing_key(algorithm: SigningAlgorithm)
-        -> Result<(SecretValue, Vec<u8>), Failure>;
+    -> Result<(SecretValue, Vec<u8>), Failure>;
 
     /// Whether the backend encrypts and decrypts DEKs with `algorithm`.
     fn supports_asymmetric_kek(algorithm: AsymmetricKekAlgorithm) -> bool;

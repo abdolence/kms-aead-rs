@@ -119,10 +119,12 @@ pub trait SignableType {
 ///         Ok(self.0.clone().into_bytes())
 ///     }
 ///
-///     fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
-///         String::from_utf8(payload).map(Statement).map_err(|_| {
-///             KmsAeadEncryptionError::create("INVALID_PAYLOAD", "The payload is not UTF-8 text")
-///         })
+///     fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
+///         std::str::from_utf8(payload)
+///             .map(|text| Statement(text.to_string()))
+///             .map_err(|_| {
+///                 KmsAeadEncryptionError::create("INVALID_PAYLOAD", "The payload is not UTF-8 text")
+///             })
 ///     }
 /// }
 /// ```
@@ -136,12 +138,13 @@ pub trait Signable: SignableType + Sized {
     fn to_payload(&self) -> KmsAeadResult<Vec<u8>>;
 
     /// The value the verified payload of an attached form stands for. Called only after the
-    /// bytes verified.
+    /// bytes verified, with the bytes borrowed from the attached value: a type that keeps them
+    /// copies them.
     ///
     /// # Errors
     ///
     /// `INVALID_PAYLOAD` when the bytes are not a value of this type.
-    fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self>;
+    fn from_payload(payload: &[u8]) -> KmsAeadResult<Self>;
 }
 
 /// A value in [`JsonEncoded`] has the payload type of the value.
@@ -171,9 +174,9 @@ where
     /// the error and none of its message, which quotes the input, or its position. The error is
     /// logged first as a `WARN` event on the `kms_aead::json` target with the outline of the bytes
     /// under `P`.
-    fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
+    fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
         Self::from_json(
-            &payload,
+            payload,
             Some(T::PAYLOAD_TYPE),
             KmsAeadEncryptionError::invalid_json_payload::<T>,
         )
@@ -280,11 +283,11 @@ mod json_tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+    use crate::KeyId;
     use crate::mac::{Authenticator, MacAlgorithm};
     use crate::providers::{LocalSigningKeyName, LocalSigningProvider};
     use crate::signing::{Signer, SigningAlgorithm, Verifier, VerifyingKeySet};
-    use crate::test_provider::{renderings, TestBackend};
-    use crate::KeyId;
+    use crate::test_provider::{TestBackend, renderings};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Order {
@@ -342,7 +345,7 @@ mod json_tests {
     fn a_payload_that_is_not_the_json_of_the_type_is_refused_without_quoting_it() {
         let payload = br#"{"id":"not-a-number","customer":"Northwind Traders"}"#;
 
-        let error = <JsonEncoded<Order> as Signable>::from_payload(payload.to_vec())
+        let error = <JsonEncoded<Order> as Signable>::from_payload(payload)
             .expect_err("the id is not a number");
 
         assert_eq!(error.code(), "INVALID_PAYLOAD");

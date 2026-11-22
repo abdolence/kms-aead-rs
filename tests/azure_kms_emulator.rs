@@ -17,14 +17,14 @@ use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{
     AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, AzureKmsSigningKeyRef,
-    AzureKmsSigningProvider, KmsKeyVersion,
+    AzureKmsSigningProvider, AzureKmsSigningProviderOptions, KmsKeyVersion,
 };
 use kms_aead::signing::{Signer, Verifier, VerifyingKeySet};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod common;
 #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
@@ -139,9 +139,9 @@ impl Emulator {
         key_name: &str,
         version: KmsKeyVersion,
     ) -> TestResult<AzureKmsSigningProvider> {
-        Ok(AzureKmsSigningProvider::with_client_options(
+        Ok(AzureKmsSigningProvider::with_options(
             &AzureKmsSigningKeyRef::new(self.vault_url.clone(), key_name.to_string(), version),
-            Some(Self::client_options()?),
+            AzureKmsSigningProviderOptions::new().with_client_options(Self::client_options()?),
             Arc::new(FixedTokenCredential),
         )?)
     }
@@ -390,8 +390,8 @@ impl Signable for Invoice {
         Ok(self.0.clone())
     }
 
-    fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
-        Ok(Invoice(payload))
+    fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
+        Ok(Invoice(payload.to_vec()))
     }
 }
 

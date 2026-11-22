@@ -1,11 +1,11 @@
-use der::asn1::OctetStringRef;
 use der::Decode;
+use der::asn1::OctetStringRef;
 use pkcs8::PrivateKeyInfoRef;
 use sec1::{EcParameters, EcPrivateKey};
 use secret_vault_value::SecretValue;
 
-use super::verifying_key::{ID_EC_PUBLIC_KEY, ID_ED25519, PRIME256V1};
 use super::SigningAlgorithm;
+use super::verifying_key::{ID_EC_PUBLIC_KEY, ID_ED25519, PRIME256V1};
 
 /// The length of an Ed25519 seed and of a P-256 scalar.
 const RAW_PRIVATE_KEY_LEN: usize = 32;

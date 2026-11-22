@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::Weak;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
@@ -337,10 +337,10 @@ impl Snapshot {
     ) -> Self {
         let mut slots = self.slots.clone();
         slots.remove(&encrypted_dek);
-        if let Some(oldest) = self.oldest.as_ref() {
-            if slots.len() >= max_entries.get() {
-                slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
-            }
+        if let Some(oldest) = self.oldest.as_ref()
+            && slots.len() >= max_entries.get()
+        {
+            slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
         }
         slots.insert(encrypted_dek, slot);
         slots.into()
@@ -439,10 +439,9 @@ impl DekCache {
     /// # Errors
     ///
     /// The provider's error, `INVALID_KEY_FORMAT` when the decrypted key is not a serialised Tink
-    /// key, and without the `legacy-formats` feature
-    /// [`KmsAeadError::LegacyFormat`](crate::errors::KmsAeadError::LegacyFormat) for a key
-    /// encrypted by 0.29 or earlier. Every caller waiting on the same decryption receives the
-    /// error, and nothing is cached. The errors of `use_dek` come back in its own return value.
+    /// key, and `LEGACY_FORMAT` for a key encrypted by 0.29 or earlier. Every caller waiting on the
+    /// same decryption receives the error, and nothing is cached. The errors of `use_dek` come back
+    /// in its own return value.
     pub async fn with_dek<P, T>(
         &self,
         provider: &P,
@@ -454,11 +453,7 @@ impl DekCache {
     {
         // An encrypted value of the same KEK that is no data encryption key, such as an exported
         // keyset, decrypts too, and the decoding of the decrypted key keeps it out.
-        let decrypt_dek = || async {
-            crate::formats::decrypt_dek(encrypted_dek, provider)
-                .await
-                .map(|(dek, _)| dek)
-        };
+        let decrypt_dek = || crate::formats::decrypt_dek(encrypted_dek, provider);
         match &self.0 {
             Some(enabled) => {
                 enabled
@@ -548,14 +543,13 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use crate::KmsAeadEncryptionProvider;
     use crate::errors::KmsAeadError;
     use crate::formats::TinkKeyType;
-    use crate::providers::{LocalKekId, LocalKmsProvider};
     use crate::test_provider::{
-        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
-        TestKmsProvider, CONCURRENT_CALLS,
+        CONCURRENT_CALLS, CountingKmsProvider, TestKmsProvider, encrypted_by_test_provider,
+        let_spawned_tasks_wait,
     };
-    use crate::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider};
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
@@ -675,9 +669,14 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     #[tokio::test]
-    async fn an_encrypted_dek_read_back_without_its_kek_version_hits_the_same_entry(
-    ) -> KmsAeadResult<()> {
+    async fn an_encrypted_dek_read_back_without_its_kek_version_hits_the_same_entry()
+    -> KmsAeadResult<()> {
+        use crate::providers::{LocalKekId, LocalKmsProvider};
+        use crate::test_provider::TestBackend;
+        use crate::{AeadAlgorithm, AeadCipher};
+
         let provider = LocalKmsProvider::<TestBackend>::ephemeral(LocalKekId::try_from(
             ORDERS_KEK.to_string(),
         )?)?;

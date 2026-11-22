@@ -11,8 +11,8 @@ use super::{KmsKeyVersion, LocalKekVersions};
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
-use crate::formats::local_kms::LocalEncryptedDek;
 use crate::formats::SymmetricKeyFormat;
+use crate::formats::local_kms::LocalEncryptedDek;
 use crate::spans::{self, kms};
 use crate::{
     AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekRef,
@@ -456,9 +456,9 @@ impl<B: AeadBackend> KmsAeadDecryptionProvider for LocalKmsProvider<B> {
 #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 mod tests {
     use super::*;
-    use crate::formats::Bare;
-    use crate::test_provider::{renderings, TestBackend};
     use crate::Encrypted;
+    use crate::formats::Bare;
+    use crate::test_provider::{TestBackend, renderings};
 
     const ORDERS: &str = "orders";
     const KEK_MATERIAL: [u8; 32] = [0x42; 32];
@@ -566,8 +566,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dek_from_a_process_listing_a_new_version_decrypts_where_only_the_old_one_is_listed(
-    ) -> KmsAeadResult<()> {
+    async fn a_dek_from_a_process_listing_a_new_version_decrypts_where_only_the_old_one_is_listed()
+    -> KmsAeadResult<()> {
         let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
         let not_restarted = LocalKmsProvider::<TestBackend>::new(
@@ -1017,18 +1017,17 @@ mod tests {
     }
 
     #[test]
-    fn a_jwk_is_read_from_an_environment_variable() -> KmsAeadResult<()> {
-        const VARIABLE: &str = "KMS_AEAD_LOCAL_KEK_TEST_JWK";
-        std::env::set_var(VARIABLE, format!(r#"{{"kty":"oct","k":"{KEK_JWK_K}"}}"#));
-
-        let kek = LocalKek::from_env(
+    fn an_unset_environment_variable_is_refused() {
+        let result = LocalKek::from_env(
             LocalKekVersion::from(NonZeroU32::MIN),
-            VARIABLE,
+            "KMS_AEAD_LOCAL_KEK_TEST_UNSET",
             SymmetricKeyFormat::Jwk,
-        )?;
+        );
 
-        assert_eq!(kek.material.ref_sensitive_value(), &KEK_MATERIAL.to_vec());
-        Ok(())
+        assert!(
+            matches!(&result, Err(error) if error.code() == "LOCAL_KEK_SOURCE"),
+            "{result:?}"
+        );
     }
 
     mod files {
@@ -1131,12 +1130,14 @@ mod tests {
             let dir = TestDir::new("newline");
             let path = dir.file("kek", format!("{KEK_BASE64}\n"));
 
-            assert!(LocalKek::from_file(
-                LocalKekVersion::from(NonZeroU32::MIN),
-                &path,
-                SymmetricKeyFormat::Base64
-            )
-            .is_ok());
+            assert!(
+                LocalKek::from_file(
+                    LocalKekVersion::from(NonZeroU32::MIN),
+                    &path,
+                    SymmetricKeyFormat::Base64
+                )
+                .is_ok()
+            );
         }
 
         #[test]

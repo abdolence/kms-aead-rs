@@ -6,6 +6,113 @@
   long as its plaintext plus a fixed overhead, so the length of an encrypted `bool` revealed it. An
   application that stores a flag defines a newtype with a `Plaintext` impl of its own. To read the
   values written before, its `from_plaintext` accepts the bytes `true` and `false`.
+- The `legacy-formats` feature is removed, with `KmsAeadEnvelope::upgrade_legacy_value`,
+  `upgrade_legacy_encrypted_dek`, `KmsAeadError::LegacyFormat`, `KmsAeadLegacyFormatError` and
+  `KmsAeadLegacyFormat`. A value or an encrypted DEK in a layout of 0.29 or earlier fails with
+  `KmsAeadError::EncryptionError` and the code `LEGACY_FORMAT`, as it did without the feature.
+  0.33 with `legacy-formats` is the last release that reads such values and rewrites them in
+  Tink's format: rewrite them on it before moving on, see
+  [Old values](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html#old-values). Delete
+  the feature from the dependency in your `Cargo.toml`, since Cargo refuses an unknown feature.
+- The hidden items that kms-aead-keyring calls are public API under new names. `__instruments` is
+  the `kms_aead::metrics` module of the `opentelemetry` feature, where `Call` is
+  `OperationAttributes`, `Outcome` is `OperationOutcome`, `record_store_load` is
+  `record_keyring_store_load` and `record_refusal` is `count_keyring_record_refusal`.
+  `OperationOutcome` and its `Value` variant are `#[non_exhaustive]`, so a value's outcome comes
+  from `OperationOutcome::value`. In `kms_aead::stream`, `__HeaderGatherer` is
+  `StreamHeaderGatherer`, `__read_header` is `read_stream_header`, and
+  `__check_stream_algorithm(&cipher)` is `cipher.check_stream_algorithm()`.
+- `KmsAeadNetworkError` does not implement `PartialEq` and `Eq`, as the other error structs do not,
+  so that a later release can give it a root cause. Code that compared two network errors compares
+  their `public.code`.
+- `LocalSigningProvider::ephemeral` returns a CSPRNG failure, `RANDOM_GENERATOR`, as a
+  `KmsAeadError::EncryptionError`, the variant of every other `RANDOM_GENERATOR` error. It was a
+  `SystemError`.
+- `Signable::from_payload` takes the payload as `&[u8]`, borrowed from the attached value, so that
+  `verify_signed` and `verify_with_mac` do not copy it. An application's own `Signable` impl takes
+  `payload: &[u8]`, and copies the bytes where it keeps them, as in `Ok(Invoice(payload.to_vec()))`.
+- `AsymmetricKekProvider<B, P>` is `AsymmetricKekProvider<P, B>`: the provider first and the
+  backend second, as in `KmsAeadEnvelope<P, B>` and `Signer<P, B>`. Code that names the type swaps
+  its two parameters; `AsymmetricKekProvider::new` takes the same arguments.
+- The eight key references, `GcpKmsKeyRef`, `AwsKmsKeyRef`, `AzureKmsKeyRef`,
+  `HcVaultTransitKeyRef`, `GcpKmsSigningKeyRef`, `AwsKmsSigningKeyRef`, `AzureKmsSigningKeyRef`
+  and `HcVaultTransitSigningKeyRef`, are `#[non_exhaustive]`, so that a minor release can add a
+  field. Build them with `new` and the `with_*` setters instead of a struct literal.
+- The variants of `SigningInput` are `#[non_exhaustive]`. Only the library builds an input, so its
+  digest is always the SHA-256 of its pre-image, and an application's own `KmsSigningProvider`
+  matches a variant with `..`, as in `SigningInput::Ed25519 { pre_image, .. }`. A test of such a
+  provider signs through a `Signer`.
+- `AzureKmsSigningProvider::with_client_options(key_ref, client_options, credential)` is
+  `with_options(key_ref, options, credential)`. `options` is the new
+  `AzureKmsSigningProviderOptions`, `#[non_exhaustive]` and built as `AzureKmsProviderOptions` is:
+  `AzureKmsSigningProviderOptions::new().with_client_options(client_options)`.
+- `KmsAeadEncryptionProvider`, `KmsAeadDecryptionProvider` and `KmsSigningProvider` are implemented
+  for `Arc<P>` and `&P` of every provider `P` that implements them, every method forwarded, so that
+  one provider serves many keyrings, envelopes or signers. An application's own impl of one of
+  these traits for a reference to its provider, such as `impl KmsAeadEncryptionProvider for
+  &MyProvider`, conflicts with them and is deleted. `AwsKmsProvider` and `AwsKmsSigningProvider`
+  are `Clone`, and a clone shares the SDK client.
+- An administrative write refuses a keyring record that holds a member this release does not know,
+  at any depth, with `KeyringError::RecordInvalid` and the reason
+  `RecordInvalidReason::UnknownMembers`, before the compare-and-swap. An earlier release rewrote
+  such a record from its own fields, so it dropped the members a later release added, and a
+  signing admin signed what was left. Readers still read the record. No record that 0.30 to 0.33
+  wrote holds such a member.
+- The Firestore store reads a record from its document's fields alone. It also read the
+  `_firestore_id`, `_firestore_full_id`, `_firestore_created` and `_firestore_updated` fields that
+  firestore-rs adds to a document, which went into the record's canonical digest, and which an
+  administrative write would refuse as unknown members.
+- Under `RecordSignaturePolicy::Required`, `KeyringRegistry::create`, `open_or_create` where it
+  would create the record, and every write of a `KeyringAdmin` without a record signer,
+  `dangerously_unsign_record` included, fail with `KeyringError::RecordSignerMissing` before any
+  KMS call or store write; `open_or_create` reads the store once first and refuses only when that
+  read finds no record. They wrote and cached an unsigned record, which every reader under the policy
+  refused. Create keyrings with `create_signed` or `open_or_create_signed`, give an admin a signer
+  with `with_record_signer`, and move the admin's registry to `VerifyIfSigned` before
+  `dangerously_unsign_record`.
+- A `create` under the id of a signed record that the process took the deletion of is checked
+  against that record before the write. An unsigned one fails with `RecordSignatureRemoved`, as
+  before, and leaves the store without a record; before, it was written first.
+- `sweep::reencrypt_records_batched` counts every candidate of a batch in `failed` when the batch
+  returns more or fewer outcomes than it was given candidates, and counts none of its outcomes.
+  It took the outcomes up to the number of candidates, so errors among the extra ones went
+  uncounted.
+- `KeyringAdmin::export_bigquery_keyset` is on an admin with a record signer too. It was on a
+  `NoRecordSigner` admin only, so an administration that signs its records could not export to
+  BigQuery.
+- `KeyVersionState`, `CompromisedReadPolicy` and `KeysetSelection` are `#[non_exhaustive]`, so that
+  a minor release can add a variant. A `match` on one of them outside the crate takes a `_` arm.
+- `store::Stored` is `#[non_exhaustive]`, so that a minor release can add a field. An
+  application's own `KeyringStore` builds one with `Stored::new(record, revision)` instead of a
+  struct literal. Its `record` and `revision` fields stay public to read.
+- The revision of `FirestoreKeyringStore` is the new `store::FirestoreRevision`, not firestore-rs's
+  `FirestoreTimestamp`, as the other stores have revision types of their own. Code that names it,
+  as in `Stored<FirestoreTimestamp>`, names `FirestoreRevision`. Its `Display` prints the update
+  time as before.
+- `PostgresTable::DEFAULT_NAME` is a `PostgresTable`, not a `&'static str`, as the default
+  collection and prefixes of the other stores are typed. Code that read it as a string calls
+  `to_string()` on it.
+- A keyring key id with any of bits 24 to 29 set is reserved, beside an id whose ordinal is zero,
+  so that a purpose a later release adds is never read as one of the four of today. A value that
+  carries such an id fails with `ReservedKeyId`, and a record that holds one with `RecordInvalid`
+  and the reason `ReservedKeyId`. Each purpose has 2^24 - 1 ordinals. Ordinals count up from 1,
+  and a record under its 1 MiB cap holds a few thousand versions at most, so no record written
+  before holds such an id, see
+  [Keyring key ids](https://kms-aead-rust.abdolence.dev/formats/keyring-records.html#keyring-key-ids).
+- The Firestore store writes every `null` member of a record as a field of Firestore's null type.
+  It left them out of the document, as firestore-rs does with a JSON `null`, so from 0.31 on every
+  signed record on Firestore read back with another canonical digest and failed with
+  `RecordSignatureInvalid`, caused by `SIGNATURE_INVALID`. To repair a signed record written
+  before, load it through the store and write it back at the revision it was loaded at, with
+  `KeyringStore::load` and then `compare_and_swap(&stored.record, Some(&stored.revision))`. `load`
+  reads the document without checking its signature, and the write puts the record back with its
+  `null` members and its signature, which verifies again when nothing but the `null` members had
+  changed. A `Swap::Conflict` means another writer changed the document first, so load it again.
+  For a record that still fails, remove the document's `signature` field and run `sign_record`
+  from a signing admin whose registry is `VerifyIfSigned`. That signs whatever the document holds,
+  so check the record against a backup first. An admin of 0.31 to 0.33 leaves the `null` members
+  out again on its next write, so upgrade the administrative binaries first, as in
+  [Roll out](https://kms-aead-rust.abdolence.dev/production/signed-records.html#roll-out).
 
 ## 0.33
 
@@ -27,9 +134,10 @@ In short:
   its `firestore` dependency to `"0.66"`. `From<FirestoreTimestamp> for SystemTime` is a
   `TryFrom` there, see the firestore-rs
   [migration guide](https://github.com/abdolence/firestore-rs/blob/master/MIGRATION.md);
-- gcloud-sdk 0.34 and bigquery 0.10 appear in no public signature of kms-aead or kms-aead-keyring.
-  An application that uses gcloud-sdk next to them moves its own dependency to `"0.34"` to keep
-  one copy in the tree.
+- `GcpKmsProvider::with_client`, `GcpKmsSigningProvider::with_client` and `GcsKeyringStore::new`
+  take a client of gcloud-sdk 0.34, so an application that passes its own client moves its
+  `gcloud-sdk` dependency to `"0.34"`. Any other application that uses gcloud-sdk next to them
+  moves it too, to keep one copy in the tree. bigquery 0.10 appears in no public signature.
 
 ## 0.31
 

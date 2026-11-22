@@ -5,7 +5,7 @@ use secret_vault_value::SecretValue;
 use crate::backends::AeadBackend;
 use crate::backends::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
-use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
+use crate::formats::{Bare, Randomized, TINK_OUTPUT_PREFIX_LEN, tink_output_prefix};
 use crate::types::checked_key_bytes;
 use crate::{
     AeadAlgorithm, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
@@ -190,9 +190,8 @@ impl<B: AeadBackend> AeadCipher<B> {
     }
 }
 
-/// Encrypting and decrypting under raw key bytes, which the envelope, the local KMS and the legacy
-/// upgrades run on. Crate-private, so that the public methods of [`AeadCipher`] take typed keys
-/// only.
+/// Encrypting and decrypting under raw key bytes, which the envelope and the local KMS run on.
+/// Crate-private, so that the public methods of [`AeadCipher`] take typed keys only.
 pub(crate) trait AeadKeyBytesOps {
     /// `prefix`, then `plain_text` encrypted under `key` with a fresh random nonce:
     /// `[prefix][nonce][ciphertext][tag]`.
