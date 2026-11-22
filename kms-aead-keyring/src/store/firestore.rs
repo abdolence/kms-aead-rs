@@ -4,7 +4,8 @@ use std::time::Duration;
 use ::firestore::errors::FirestoreError;
 use ::firestore::gcloud_sdk::google::firestore::v1::Document;
 use ::firestore::{
-    FirestoreCollectionId, FirestoreDb, FirestoreTimestamp, FirestoreWritePrecondition,
+    FirestoreCollectionId, FirestoreDb, FirestoreTimestamp, FirestoreValue,
+    FirestoreWritePrecondition,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -251,8 +252,15 @@ fn stored_record_from_document(
     document: &Document,
     operation: StoreOperation,
 ) -> KeyringResult<Stored<FirestoreTimestamp>> {
-    let fields: Value =
-        FirestoreDb::deserialize_doc_to(document).map_err(|_| KeyringError::malformed(id, None))?;
+    // The document's own fields only: `FirestoreDb::deserialize_doc_to` adds its name and times,
+    // which are no members of the record and would change its canonical digest.
+    let fields = Value::deserialize(FirestoreValue::from_map(
+        document
+            .fields
+            .iter()
+            .map(|(name, value)| (name, FirestoreValue::from(value.clone()))),
+    ))
+    .map_err(|_| KeyringError::malformed(id, None))?;
     let json = serde_json::to_vec(&fields).map_err(|_| KeyringError::malformed(id, None))?;
     Ok(Stored {
         record: KeyringRecord::from_json(id, &json)?,
