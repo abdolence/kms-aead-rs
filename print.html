@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f28a4b3b.js";
+            window.path_to_searchindex_js = "searchindex-f1c2764a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5b436d00.js"></script>
@@ -865,8 +865,8 @@ value: one encryption per new DEK, one decryption per response per DEK cache TTL
 <a href="#dek-caching-and-reuse">DEK caching and reuse</a>.</li>
 </ul>
 <h2 id="the-server"><a class="header" href="#the-server">The server</a></h2>
-<p>The response of <code>StreamBodyAs</code> is taken apart: its body is the encoded bytes, and its
-<code>Content-Type</code> names the format. The handler replaces the content type with an opaque one, since
+<p>The handler reads the <code>Content-Type</code> of the <code>StreamBodyAs</code> response, which names the format, and
+takes its body, the encoded bytes. The handler replaces the content type with an opaque one, since
 the body is ciphertext, and keeps the format’s in a header of its own. The AAD names the export, so
 that a body of another export does not decrypt under it:</p>
 <pre><code class="language-rust">use std::sync::Arc;
@@ -874,13 +874,12 @@ that a body of another export does not decrypt under it:</p>
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderValue, Response, StatusCode};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum_streams::{JsonNewLineStreamFormat, StreamBodyAs};
+use axum_streams::StreamBodyAs;
 use futures::stream;
 use kms_aead::stream::EncryptingStream;
-<span class="boring">use futures::StreamExt;
-</span><span class="boring">use kms_aead::backends::Ring;
+<span class="boring">use kms_aead::backends::Ring;
 </span><span class="boring">use kms_aead::providers::LocalKmsProvider;
 </span><span class="boring">use kms_aead::KmsAeadEnvelope;
 </span><span class="boring">use serde::Serialize;
@@ -895,26 +894,22 @@ const EXPORT_AAD: &amp;[u8] = b"exports/orders/2026-10";
 
 async fn export_orders(
     State(envelope): State&lt;Arc&lt;Envelope&gt;&gt;,
-) -&gt; Result&lt;Response&lt;Body&gt;, (StatusCode, String)&gt; {
-    let orders = stream::iter((0..50_000).map(|id| Order { id })).map(Ok::&lt;_, axum::Error&gt;);
-    let (mut parts, encoded) =
-        StreamBodyAs::new(JsonNewLineStreamFormat::new(), orders).into_response().into_parts();
-    let inner_content_type = parts.headers.remove(CONTENT_TYPE);
+) -&gt; Result&lt;impl IntoResponse, (StatusCode, String)&gt; {
+    let orders = stream::iter((0..50_000).map(|id| Order { id }));
+    let encoded = StreamBodyAs::json_nl(orders).into_response();
+    let inner_content_type = encoded.headers().get(CONTENT_TYPE).cloned();
 
     let encryptor = envelope
         .stream_encryptor(EXPORT_AAD)
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.code().to_string()))?;
-    let ciphertext = EncryptingStream::new(encryptor, encoded.into_data_stream());
+    let ciphertext = EncryptingStream::new(encryptor, encoded.into_body().into_data_stream());
 
-    let mut response = Response::new(Body::from_stream(ciphertext));
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-    if let Some(inner_content_type) = inner_content_type {
-        response.headers_mut().insert("x-inner-content-type", inner_content_type);
-    }
-    Ok(response)
+    Ok((
+        [(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
+        inner_content_type.map(|value| [("x-inner-content-type", value)]),
+        Body::from_stream(ciphertext),
+    ))
 }</code></pre>
 <p>The route is <code>get(export_orders)</code>, with the envelope in an <code>Arc</code> as the router’s state.
 <code>EncryptingStream</code> takes its source as a <code>Stream</code> of <code>Result&lt;Bytes, _&gt;</code> whose error converts into
