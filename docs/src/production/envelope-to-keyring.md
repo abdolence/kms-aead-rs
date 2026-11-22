@@ -1,11 +1,15 @@
 # Move envelope values to a keyring
 
-Values that kms-aead's `KmsAeadEnvelope` wrote, per call or store-less, move to keyring values in
-five steps:
+An application that encrypted fields with `KmsAeadEnvelope` can move them to a keyring when it
+needs central rotation and retirement of keys, or BigQuery and Tink reads across rotations, see
+[Keyring and field encryption](../keyring.md). The values that `KmsAeadEnvelope` wrote, per call or
+store-less, move to keyring values in five steps. An `EncryptionMarker` is the 5 bytes a record
+stores beside its encrypted fields to name the key versions they are under, `0x01` and an epoch
+that counts re-encryptions, see [The encryption marker](./sweeps.md#the-encryption-marker):
 
 1. the model gains `encryption_marker: EncryptionMarker`, and every record without one reads as
    `EncryptionMarker::ENVELOPE`: through `#[serde(default)]`, or a column default of its bytes,
-   `'\x0100000000'`;
+   `'\x0100000000'`, which is `0x01` and an epoch of 0;
 2. the field keeps its stored bytes, whose layout the marker names: envelope values under
    `ENVELOPE`, epoch 0, and keyring values under any other marker, since the epochs of a keyring
    start at 1;
@@ -66,8 +70,8 @@ let (email, outcome) = match StoredEmail::try_from(row)? {
 ```
 
 The keyring's provider decrypts the envelope values, so they must have been encrypted by the
-keyring's KEK. `decrypt_envelope_for_migration` reads Tink's KMS envelope, the layout kms-aead 0.30 writes.
-Values written by kms-aead 0.29 or earlier are upgraded in place first, with
+keyring's KEK. `decrypt_envelope_for_migration` reads Tink's KMS envelope, the layout `KmsAeadEnvelope` writes.
+Values in a legacy layout, which an old release wrote, are upgraded in place first, with
 `KmsAeadEnvelope::upgrade_legacy_value(aad, value)` under kms-aead's `legacy-formats` feature, see
 [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values). The layout of a value is always
 the marker's, never inferred from its bytes.
