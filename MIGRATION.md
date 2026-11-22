@@ -1,6 +1,14 @@
 # Migration guide
 
-## Unreleased
+## 0.34
+
+v0.34.0 prepares the public API of both crates for 1.0. It removes the `legacy-formats` feature,
+makes public the items kms-aead-keyring called through hidden paths, and adds `#[non_exhaustive]`
+where a 1.x release may need to grow a type. It also fixes signed keyring records on Firestore,
+which failed verification from 0.31 on. Both crates move to edition 2024; the minimum Rust version
+stays 1.99.
+
+In short:
 
 - `Plaintext` has no impl for `bool`. `true` and `false` differ in length, and a stored value is as
   long as its plaintext plus a fixed overhead, so the length of an encrypted `bool` revealed it. An
@@ -70,9 +78,9 @@
   refused. Create keyrings with `create_signed` or `open_or_create_signed`, give an admin a signer
   with `with_record_signer`, and move the admin's registry to `VerifyIfSigned` before
   `dangerously_unsign_record`.
-- A `create` under the id of a signed record that the process took the deletion of is checked
-  against that record before the write. An unsigned one fails with `RecordSignatureRemoved`, as
-  before, and leaves the store without a record; before, it was written first.
+- When the process has seen a signed record deleted, a `create` under its id is checked against
+  that record before the write. An unsigned create fails with `RecordSignatureRemoved`, as before,
+  and now leaves the store without a record. It was written first.
 - `sweep::reencrypt_records_batched` counts every candidate of a batch in `failed` when the batch
   returns more or fewer outcomes than it was given candidates, and counts none of its outcomes.
   It took the outcomes up to the number of candidates, so errors among the extra ones went
