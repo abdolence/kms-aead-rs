@@ -1,7 +1,8 @@
 # Spans and events
 
-The spans and events of kms-aead and kms-aead-keyring, and the fields of each span. What they never
-carry is on [Observability](../observability.md#what-is-never-logged).
+This page has the spans and events of kms-aead and kms-aead-keyring, and the fields of each span.
+Read it to filter the library's logs, to build traces, or to find the log line behind an alert. What
+they never carry is on [Observability](../observability.md#what-is-never-logged).
 
 ## Spans
 
@@ -146,8 +147,7 @@ calls do. The spans carry no payload, signature, tag or key bytes.
 Besides the spans, the library logs:
 
 - `WARN`, inside the KMS span: a GCP or Vault Transit response without a key version;
-- `WARN`, once per process and layout: the first read of a layout of 0.29 or earlier with
-  `legacy-formats`;
+- `WARN`, once per process and layout: the first read of a legacy layout with `legacy-formats`;
 - `WARN`, when a Vault Transit provider is created: an `http` address to another host, or a system
   CA certificate that cannot be loaded;
 - `WARN`, on the `kms_aead::json` target: a `JsonEncoded` value that does not decode, see
@@ -182,10 +182,8 @@ away the length of the values before them. The library logs one `WARN` event on 
 
 By default the outline shows the shape of the JSON: the type of every value, `<key>` for every
 key, the nesting, and where serde_json stopped reading it, with serde_json's message for a syntax
-error. That message is fixed text, and it can state a property of a value the outline hides, such
-as `number out of range`, `invalid unicode code point` or `unexpected end of hex escape`. The
-default shows no length and no position, since [a length gives away a hidden
-boolean](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES).
+error. That message can state a property of a value the outline hides, and the default shows no
+length and no position, see [What is never logged](../observability.md#what-is-never-logged).
 
 A type opts into more with a policy, the second type parameter of `JsonEncoded`.
 A signed payload is often public, so its policy may show more than an encrypted plaintext's. See
@@ -194,7 +192,7 @@ outlines it produces.
 `kms_aead::json=off` in an `EnvFilter` turns the event off.
 
 An application outlines JSON of its own with `RedactedJson`, with no encryption involved, see
-[Log JSON payloads without leaking data](../use-cases/log-json-payloads.md).
+[Log a webhook payload that failed to parse](../use-cases/log-json-payloads.md).
 
 ## Keyring spans
 
@@ -256,7 +254,8 @@ those of `KeyringAdmin` calls, under the `admin` feature.
   KEK](../asymmetric-kek.md#keyrings-under-an-asymmetric-kek);
 - `WARN`: a `KeyringAdmin` without a record signer built over a provider whose
   `encrypts_with_public_key()` is `true`;
-- `WARN`: a failed revalidation, the cached record staying in use;
+- `WARN`: a failed revalidation, "The keyring record could not be revalidated; the cached record
+  stays in use". The process misses every change until the store answers again, so alert on it;
 - `WARN`: "The keyring store no longer holds the keyring record; every version is destroyed in this
   process", when a read finds the record gone: the process then holds the record with every
   version destroyed and stops revalidating the keyring, see

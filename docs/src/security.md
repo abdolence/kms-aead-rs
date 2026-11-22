@@ -1,5 +1,10 @@
 # Security considerations
 
+This page defines the threat model, the nonce and data volume bounds, key lifetime and zeroisation,
+what rotation does not protect, the assumptions of a keyring deployment and where to report a
+vulnerability. Read it when you review a deployment or decide which controls to rely on; the
+permissions of a deployment are in [Permissions: applications and administration](./production/permissions.md).
+
 ## Threat model
 
 Envelope encryption protects stored values from whoever can read the store but cannot use the KEK: a
@@ -44,7 +49,8 @@ writes it in front of the cipher text. NIST SP 800-38D allows 2^32 encryptions u
 random 96-bit nonces, and the library applies the same bound to every algorithm:
 
 - the per-call envelope encrypts one value per DEK, so the bound does not apply to it;
-- a store-less envelope renews its DEK at `max_uses`, 2^24 by default and at most 2^32;
+- a store-less envelope renews its DEK at `max_uses`, at most 2^32, see
+  [Volume limit](./dek-caching.md#volume-limit);
 - with `encrypt_with_dek` and `AeadCipher`, the application counts the values it encrypts
   under one key, and moves to a new key before 2^32;
 - the local KMS encrypts each DEK it encrypts with AES-256-GCM, so a KEK version is good for about
@@ -57,7 +63,14 @@ Deterministic encryption with AES-SIV takes no random nonce.
 
 ## Data volume
 
-AES-GCM also has a bound on the data under one key, whatever the nonces. The bounds per algorithm:
+AES-GCM also has a bound on the data under one key, whatever the nonces. The bounds per algorithm,
+and the sources below the table:
+
+| Algorithm | Values under one key | Data under one key |
+|---|---|---|
+| AES-GCM | 2^32 with random 96-bit nonces | 2^38.5 bytes (RFC 8446), at most 2^52 bytes (RFC 8452) |
+| AES-GCM-SIV | 2^32 values of up to 8 GiB each | no bound beyond the number of values |
+| ChaCha20-Poly1305 | 2^32, the library's bound for every algorithm | no confidentiality limit beyond ChaCha20 itself |
 
 - AES-GCM: RFC 8446, section 5.5, allows "up to 2^24.5 full-size records (about 24 million)" of
   2^14 bytes, 2^38.5 bytes, "while keeping a safety margin of approximately 2^-57 for
@@ -73,8 +86,8 @@ AES-GCM also has a bound on the data under one key, whatever the nonces. The bou
 
 The bound applies to AES-GCM keys this way:
 
-- a store-less envelope renews its DEK at `max_bytes`, 2^38 bytes by default under AES-GCM, below
-  the 2^38.5 of RFC 8446, and at most 2^52, see [Volume limit](./dek-caching.md#volume-limit).
+- a store-less envelope renews its DEK at `max_bytes`, which defaults below the 2^38.5 of RFC 8446
+  under AES-GCM and is at most 2^52, see [Volume limit](./dek-caching.md#volume-limit).
   AES-256-GCM-SIV and ChaCha20-Poly1305 have no default volume limit;
 - with `encrypt_with_dek` and `AeadCipher`, the application counts the bytes it encrypts under one
   AES-GCM key too, and moves to a new key before 2^38 bytes.
@@ -91,7 +104,9 @@ Some copies are out of the library's reach:
   response buffers, which kms-aead cannot zeroise. The same holds for the Vault token in the HTTP
   stack;
 - the copies of a key inside a crypto backend: what each backend clears is in its section of
-  [Crypto backends](./crypto-backends.md#ring);
+  [Crypto backends](./crypto-backends.md): [ring](./crypto-backends.md#ring),
+  [aws-lc-rs](./crypto-backends.md#aws-lc-rs-and-fips) and
+  [RustCrypto](./crypto-backends.md#rustcrypto);
 - an expired DEK stays in the cache's memory until the next call on the cache or
   `purge_expired`;
 - `decrypt` returns the application's own `T: Plaintext`. Only `SecretValue` as `T` is zeroised on
@@ -172,23 +187,17 @@ version.
   the version's key under the same KEK, see
   [What survives a shred](./use-cases/erase-a-tenant.md#what-survives-a-shred);
 - **`dangerously_shred()` reaches the store's API only.** It deletes the record with the earlier
-  versions the store keeps, and never calls the KMS. What the store keeps beyond its API stays until
-  the operator deletes it: Firestore serves a deleted document to reads at an earlier time for one
-  hour, and for seven days with point-in-time recovery on; Cloud Storage's soft delete keeps every
-  deleted generation restorable for the bucket's retention, 7 days by default; backups, exports, WAL
-  archives, replicas and replication hold the record until they are deleted. Every such copy, and
-  every BigQuery and Tink keyset exported from the keyring, still decrypts while a KEK version that
-  encrypted its DEKs exists: delete the copies, or rotate the KEK, re-encrypt every other keyring
-  under it and destroy the previous KEK versions. Values encrypted under the keyring stay where they
-  are and decrypt under nothing, and the keyring id is free for a new keyring;
+  versions the store keeps, and never calls the KMS. A copy the store keeps beyond its API, such as
+  a backup, and every BigQuery and Tink keyset exported from the keyring, still decrypts while a KEK
+  version that encrypted its DEKs exists: delete the copies, or rotate the KEK, re-encrypt every
+  other keyring under it and destroy the previous KEK versions. See
+  [What a delete removes](./keyring/stores.md#what-a-delete-removes) for each store's copies;
 - **a running process keeps the deleted record as the baseline of its id.** A store writer who
-  deletes the record and writes another under the id gains nothing against it: a signed keyring
-  stays signed, so under `VerifyIfSigned` an unsigned record fails with `RecordSignatureRemoved`,
-  and a copy of the record from before the deletion, signed or not, fails with `RecordRegressed` and
-  an `ERROR`, because it revives a version the process holds destroyed. A keyring created again
-  under the id has other versions, by key id or creation time, and decrypts. The baseline lasts
-  until the process restarts, so an accidentally deleted record that is restored is taken by a new
-  process only. A new process has no baseline, and `Required` is the control for it;
+  deletes the record and writes another under the id gains nothing against it: an unsigned record
+  under `VerifyIfSigned` fails with `RecordSignatureRemoved`, and a copy of the record from before
+  the deletion fails with `RecordRegressed` and an `ERROR`. The baseline lasts until the process
+  restarts, and a new process has no baseline, so `Required` is the control for it, see
+  [A record gone from the store](./keyring/record-cache.md#a-record-gone-from-the-store);
 - **an exported BigQuery keyset holds the versions' keys**, encrypted with no associated data, since
   BigQuery decrypts it with none. Treat it as a copy of the record's readable versions, and export
   again after every rotation and every `mark_compromised`;

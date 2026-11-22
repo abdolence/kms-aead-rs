@@ -1,7 +1,9 @@
 # Observability
 
 kms-aead and kms-aead-keyring report what they do through
-[tracing](https://github.com/tokio-rs/tracing) spans and events, and through OpenTelemetry metrics:
+[tracing](https://github.com/tokio-rs/tracing) spans and events, and through OpenTelemetry metrics.
+This page lists the two pages that hold them and states what neither ever logs; read it before you
+enable the spans in a pipeline that other people can read:
 
 - [Spans and events](./observability/spans-and-events.md): one `DEBUG` span for every envelope call,
   KMS call and keyring call, with the fields of each; the events both crates log; how to show the
