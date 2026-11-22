@@ -73,4 +73,6 @@ pub use hc_vault_transit_signing::{HcVaultTransitSigningKeyRef, HcVaultTransitSi
 #[cfg(feature = "azure-kms-encryption-base")]
 mod azure_kms_signing;
 #[cfg(feature = "azure-kms-encryption-base")]
-pub use azure_kms_signing::{AzureKmsSigningKeyRef, AzureKmsSigningProvider};
+pub use azure_kms_signing::{
+    AzureKmsSigningKeyRef, AzureKmsSigningProvider, AzureKmsSigningProviderOptions,
+};

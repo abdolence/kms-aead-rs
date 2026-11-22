@@ -4,7 +4,9 @@ use azure_core::http::{ClientOptions, RetryOptions, StatusCode, Transport};
 use azure_security_keyvault_keys::KeyClientOptions;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::PublicKeyFormat;
-use kms_aead::providers::{AzureKmsSigningKeyRef, AzureKmsSigningProvider, KmsKeyVersion};
+use kms_aead::providers::{
+    AzureKmsSigningKeyRef, AzureKmsSigningProvider, AzureKmsSigningProviderOptions, KmsKeyVersion,
+};
 use kms_aead::signing::{
     KmsSigningProvider, RawSignature, Signer, SigningAlgorithm, SigningInput, SigningKeyRef,
     VerifyingKey,
@@ -33,13 +35,13 @@ fn key_id(version: &str) -> String {
 
 fn provider_over(http_client: Arc<CannedHttpClient>) -> KmsAeadResult<AzureKmsSigningProvider> {
     common::install_crypto_provider();
-    AzureKmsSigningProvider::with_client_options(
+    AzureKmsSigningProvider::with_options(
         &AzureKmsSigningKeyRef::new(
             VAULT_URL.into(),
             KEY_NAME.into(),
             KmsKeyVersion::try_from(KEY_VERSION.to_string())?,
         ),
-        Some(KeyClientOptions {
+        AzureKmsSigningProviderOptions::new().with_client_options(KeyClientOptions {
             client_options: ClientOptions {
                 transport: Some(Transport::new(http_client)),
                 retry: RetryOptions::none(),

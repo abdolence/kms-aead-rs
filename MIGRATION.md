@@ -42,6 +42,10 @@
   digest is always the SHA-256 of its pre-image, and an application's own `KmsSigningProvider`
   matches a variant with `..`, as in `SigningInput::Ed25519 { pre_image, .. }`. A test of such a
   provider signs through a `Signer`.
+- `AzureKmsSigningProvider::with_client_options(key_ref, client_options, credential)` is
+  `with_options(key_ref, options, credential)`. `options` is the new
+  `AzureKmsSigningProviderOptions`, `#[non_exhaustive]` and built as `AzureKmsProviderOptions` is:
+  `AzureKmsSigningProviderOptions::new().with_client_options(client_options)`.
 
 ## 0.33
 

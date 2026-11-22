@@ -31,6 +31,14 @@ pub struct AzureKmsSigningKeyRef {
     pub version: KmsKeyVersion,
 }
 
+/// Options for [`AzureKmsSigningProvider`].
+#[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
+pub struct AzureKmsSigningProviderOptions {
+    /// Client settings passed to the Azure SDK, such as a custom HTTP transport or retry policy.
+    pub client_options: Option<KeyClientOptions>,
+}
+
 /// The length of each coordinate of a P-256 point.
 const P256_COORDINATE_LEN: usize = 32;
 
@@ -61,31 +69,30 @@ impl AzureKmsSigningProvider {
     ///
     /// # Errors
     ///
-    /// As [`with_client_options`](Self::with_client_options).
+    /// As [`with_options`](Self::with_options).
     pub fn new(
         key_ref: &AzureKmsSigningKeyRef,
         credential: Arc<dyn TokenCredential>,
     ) -> KmsAeadResult<Self> {
-        Self::with_client_options(key_ref, None, credential)
+        Self::with_options(key_ref, AzureKmsSigningProviderOptions::new(), credential)
     }
 
-    /// As [`new`](Self::new), with `client_options` for the Azure SDK, such as a custom HTTP
-    /// transport or retry policy.
+    /// As [`new`](Self::new), with `options`.
     ///
     /// # Errors
     ///
     /// A [`SystemError`](crate::errors::KmsAeadError::SystemError): `AZURE_KEY_NAME` when the key
     /// name holds characters Key Vault does not allow in it, and `AZURE_VAULT_URL` when the vault
     /// URL is not an HTTP(S) URL.
-    pub fn with_client_options(
+    pub fn with_options(
         key_ref: &AzureKmsSigningKeyRef,
-        client_options: Option<KeyClientOptions>,
+        options: AzureKmsSigningProviderOptions,
         credential: Arc<dyn TokenCredential>,
     ) -> KmsAeadResult<Self> {
         let client = azure_key_client(
             &key_ref.vault_url,
             &key_ref.key_name,
-            client_options,
+            options.client_options,
             credential,
         )?;
         let key = format!(
