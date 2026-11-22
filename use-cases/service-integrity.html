@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Check integrity between your own services - KMS envelope encryption for Rust</title>
+        <title>Detect tampering with jobs and rows between your services - KMS envelope encryption for Rust</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f1c2764a.js";
+            window.path_to_searchindex_js = "../searchindex-aa9f55fb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5b436d00.js"></script>
+        <script src="../toc-855509b8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,7 +177,7 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="check-integrity-between-your-own-services"><a class="header" href="#check-integrity-between-your-own-services">Check integrity between your own services</a></h1>
+                        <h1 id="detect-tampering-with-jobs-and-rows-between-your-services"><a class="header" href="#detect-tampering-with-jobs-and-rows-between-your-services">Detect tampering with jobs and rows between your services</a></h1>
 <p>One service puts a job on a queue, an entry in a cache or a row in a table, and another reads it.
 The reader needs to know that nobody who can write the queue, the cache or the table changed the
 bytes. A MAC, a keyed hash, answers that with a key only the application’s services hold, and costs
@@ -243,11 +243,11 @@ let job = keyring.verify_with_mac(&amp;with_mac).await?.0;
 own, such as the columns of a row, <code>Encryptor::mac</code> computes a detached <code>Mac&lt;T&gt;</code> to store beside it,
 and <code>Keyring::verify_mac</code> checks it against the payload as read.</p>
 <p>Both services build a <code>Keyring</code> for the same keyring id, with decrypt on the keyring’s KEK and read
-access to its record, see <a href="./deployment.html">Applications and administration apart</a>. Every service
+access to its record, see <a href="../production/deployment.html">Applications and administration apart</a>. Every service
 that holds the key can compute a valid tag, so a MAC protects the bytes from whoever writes the
 store, and says nothing about which service wrote them.</p>
 <h2 id="rotation"><a class="header" href="#rotation">Rotation</a></h2>
-<p>A MAC version rotates and retires like the others, see <a href="./rotation.html">Rotate keys and re-encrypt
+<p>A MAC version rotates and retires like the others, see <a href="../production/rotation.html">Rotate keys and re-encrypt
 values</a>. A sweep re-encrypts <code>Encrypted</code> fields and does not touch MACs, and a value
 under a retired version fails with <code>KEY_VERSION_RETIRED</code>. Authenticate the payloads that still
 matter again under the active version before retiring the old one. Messages that are consumed within
@@ -269,7 +269,7 @@ services:</p>
 </div>
 <p>A webhook your customers verify, a release, and a record whose writer must be told apart from its
 readers are signatures. See <a href="./publish-verifiable.html">Publish content anyone can verify</a>, and
-<a href="./signed-records.html">Protect the keyring record</a> for the keyring’s own record.</p>
+<a href="../production/signed-records.html">Protect the keyring record</a> for the keyring’s own record.</p>
 <h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
 <ul>
 <li>Nothing outside the payload type and the payload is authenticated. A message that must not be
@@ -288,7 +288,7 @@ the keyring gets its first MAC version.</li>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../use-cases/log-json-payloads.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../use-cases/write-only-producers.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -302,7 +302,7 @@ the keyring gets its first MAC version.</li>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../use-cases/log-json-payloads.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../use-cases/write-only-producers.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

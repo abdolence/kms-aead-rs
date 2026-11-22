@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>A keyring per tenant - KMS envelope encryption for Rust</title>
+        <title>Give each customer of a SaaS its own keys - KMS envelope encryption for Rust</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f1c2764a.js";
+            window.path_to_searchindex_js = "../searchindex-aa9f55fb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5b436d00.js"></script>
+        <script src="../toc-855509b8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,10 +177,12 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="a-keyring-per-tenant"><a class="header" href="#a-keyring-per-tenant">A keyring per tenant</a></h1>
-<p>A multi-tenant application gives each tenant a keyring of its own: its own key versions, rotated,
-flagged and destroyed apart from the others, in one keyring store such as Firestore or
-PostgreSQL. The keyring id names the tenant, see
+                        <h1 id="give-each-customer-of-a-saas-its-own-keys"><a class="header" href="#give-each-customer-of-a-saas-its-own-keys">Give each customer of a SaaS its own keys</a></h1>
+<p>A SaaS product stores the data of many customers. One of them asks for its keys to be rotated, or
+leaves and wants its data gone, and with one set of keys for everybody that cannot be done without
+touching the others. A multi-tenant application gives each tenant a keyring of its own: its own key
+versions, rotated, flagged and destroyed apart from the others, in one keyring store such as
+Firestore or PostgreSQL. The keyring id names the tenant, see
 <a href="../keyring/lifecycle.html#the-record">The record</a> for the ids it takes.</p>
 <h2 id="one-kek-per-tenant-or-one-shared-kek"><a class="header" href="#one-kek-per-tenant-or-one-shared-kek">One KEK per tenant or one shared KEK</a></h2>
 <div class="table-wrapper">
@@ -197,7 +199,7 @@ PostgreSQL. The keyring id names the tenant, see
 </table>
 </div>
 <p>The first row is the store-writer threat of <a href="../security.html#keyring-deployment">Keyring deployment</a>,
-and the third the two routes of <a href="./incidents.html#crypto-shredding">Crypto-shredding</a>. A deployment
+and the third the two routes of <a href="./erase-a-tenant.html#crypto-shredding">Crypto-shredding</a>. A deployment
 that needs either guarantee uses a KEK per tenant.</p>
 <h2 id="creating-the-keyrings"><a class="header" href="#creating-the-keyrings">Creating the keyrings</a></h2>
 <p>An application opens only keyrings that exist, so each tenant’s keyring is created first:</p>
@@ -225,7 +227,7 @@ see <a href="../operations/sweeps.html#the-encryption-marker">The encryption mar
 <a href="../keyring.html#the-registry-and-its-handles">The registry and its handles</a>.</li>
 </ol>
 <p>Rotations and sweeps run per keyring: the administrative job loops over the tenants, see
-<a href="./rotation.html">Rotate keys and re-encrypt values</a>.</p>
+<a href="../production/rotation.html">Rotate keys and re-encrypt values</a>.</p>
 <h2 id="what-many-keyrings-cost"><a class="header" href="#what-many-keyrings-cost">What many keyrings cost</a></h2>
 <p>A keyring stays open until the registry shuts down, so a process holds every keyring it opened:</p>
 <ul>
@@ -240,7 +242,7 @@ for capacity is decrypted through the KMS again on its next use, so size it abov
 process serves times the versions each uses, see <a href="../dek-caching.html#sizing">Sizing</a>;</li>
 <li><strong>KMS calls</strong>: one decryption per version per DEK cache TTL in every process, and two per version
 in each <code>reencrypt_deks</code>. A KEK rotation re-encrypts every keyring under the KEK, see
-<a href="./rotation.html#the-kms-decrypt-burst">The KMS decrypt burst</a>;</li>
+<a href="../production/rotation.html#the-kms-decrypt-burst">The KMS decrypt burst</a>;</li>
 <li><strong>metrics</strong>: the plaintext size histogram has a series per keyring and version, see
 <a href="../observability.html#metrics">Metrics</a> for its cardinality limit.</li>
 </ul>
@@ -249,7 +251,7 @@ in each <code>reencrypt_deks</code>. A KEK rotation re-encrypts every keyring un
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../use-cases/encrypt-fields.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../use-cases/fewer-kms-calls.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -263,7 +265,7 @@ in each <code>reencrypt_deks</code>. A KEK rotation re-encrypts every keyring un
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../use-cases/encrypt-fields.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../use-cases/fewer-kms-calls.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

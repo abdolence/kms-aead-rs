@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f1c2764a.js";
+            window.path_to_searchindex_js = "../searchindex-aa9f55fb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5b436d00.js"></script>
+        <script src="../toc-855509b8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -454,7 +454,7 @@ candidate query included.</p>
 little traffic. Firestore advises starting a new collection at 500 writes a second and raising the
 rate by 50% every 5 minutes, its 500/50/5 rule, so raise <code>CONCURRENCY</code> step by step on one.</p>
 <p>A range filter never matches a document without the field, so a document written before the marker
-needs the marker written first, see <a href="../use-cases/envelope-to-keyring.html">Move envelope values to a
+needs the marker written first, see <a href="../production/envelope-to-keyring.html">Move envelope values to a
 keyring</a>.</p>
 <p>A partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers would
 read every document, the current ones included.</p>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Read values in BigQuery or Tink - KMS envelope encryption for Rust</title>
+        <title>Decrypt columns in BigQuery SQL or with Tink - KMS envelope encryption for Rust</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f1c2764a.js";
+            window.path_to_searchindex_js = "../searchindex-aa9f55fb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5b436d00.js"></script>
+        <script src="../toc-855509b8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,9 +177,10 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="read-values-in-bigquery-or-tink"><a class="header" href="#read-values-in-bigquery-or-tink">Read values in BigQuery or Tink</a></h1>
-<p>Values the library writes are in Tink’s formats, so Tink in another language and BigQuery’s SQL
-read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
+                        <h1 id="decrypt-columns-in-bigquery-sql-or-with-tink"><a class="header" href="#decrypt-columns-in-bigquery-sql-or-with-tink">Decrypt columns in BigQuery SQL or with Tink</a></h1>
+<p>An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
+or Python needs to read values a Rust service wrote. Values the library writes are in Tink’s
+formats, so Tink in another language and BigQuery’s SQL read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
 whether the key rotates:</p>
 <div class="table-wrapper">
 <table>

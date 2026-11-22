@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f1c2764a.js";
+            window.path_to_searchindex_js = "searchindex-aa9f55fb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5b436d00.js"></script>
+        <script src="toc-855509b8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,8 +180,8 @@
                         <h1 id="operations"><a class="header" href="#operations">Operations</a></h1>
 <p>Running a keyring in production: how often to rotate, how sweeps move values to the active
 versions, the migration from envelope values, and what to do when a key leaks. The tasks, step by
-step with their checks and alerts, are in <a href="./use-cases/rotation.html">Rotate keys and re-encrypt values</a>
-and <a href="./use-cases/incidents.html">A leaked key or a shredded tenant</a>.</p>
+step with their checks and alerts, are in <a href="./production/rotation.html">Rotate keys and re-encrypt values</a>
+and <a href="./production/incidents.html">Respond to a leaked key</a>.</p>
 <h2 id="rotation-cadence"><a class="header" href="#rotation-cadence">Rotation cadence</a></h2>
 <p>A rotation is staged: <code>rotate</code>, export the BigQuery keysets again, wait for every process to see
 the pending version, then <code>promote</code>. How often to rotate follows from the nonce and volume bounds
@@ -199,7 +199,7 @@ sweeps by store have the queries and writes of <a href="./operations/sweeps-fire
 <a href="./operations/sweeps-postgres.html">PostgreSQL</a> and <a href="./operations/sweeps-bigquery.html">BigQuery</a>.</p>
 <h2 id="migrating-from-envelope-values"><a class="header" href="#migrating-from-envelope-values">Migrating from envelope values</a></h2>
 <p>Values that <code>KmsAeadEnvelope</code> wrote move to keyring values in five steps, with the encryption
-marker telling the two layouts apart and a sweep re-encrypting the envelope values. See <a href="./use-cases/envelope-to-keyring.html">Move
+marker telling the two layouts apart and a sweep re-encrypting the envelope values. See <a href="./production/envelope-to-keyring.html">Move
 envelope values to a keyring</a>.</p>
 <h2 id="emergency-runbook"><a class="header" href="#emergency-runbook">Emergency runbook</a></h2>
 <p>What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant, a
