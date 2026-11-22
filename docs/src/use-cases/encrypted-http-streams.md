@@ -14,7 +14,8 @@ The encryption sits on the bytes of the body, between the format and the socket:
 - the client passes the bytes of the response to `decrypting_stream` of the envelope, and hands
   the plaintext to the decoder of [reqwest-streams](https://github.com/abdolence/reqwest-streams-rs);
 - the format knows nothing about encryption, and the envelope knows nothing about items. The
-  body is one Cobblestone stream in the envelope form, so the KMS is called as for any streamed
+  body is one Cobblestone stream in the envelope form, the chunked encryption format of the C2SP
+  specification, see [Format](../streaming.md#format), so the KMS is called as for any streamed
   value: one encryption per new DEK, one decryption per response per DEK cache TTL, see
   [DEK caching and reuse](../dek-caching.md).
 
@@ -147,8 +148,7 @@ order that was sent. Run it with `cargo run --example axum_encrypted_stream --fe
   and the client should check its value against the formats it decodes;
 - ciphertext does not compress, so a compression layer on the route gains nothing;
 - the AAD must be the same on both sides. A value that names the export, the tenant or the user
-  keeps a body from decrypting under another route, see
-  [Encrypted fields and AAD](../keyring/fields.md).
+  keeps a body from decrypting under another route, see [AAD](../envelope-encryption.md#aad).
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/axum_encrypted_stream.rs).

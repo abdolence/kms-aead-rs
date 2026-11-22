@@ -9,7 +9,7 @@ for that. See [Signatures and MACs](../signing.md#macs-in-a-keyring).
 ## Keyring MACs
 
 A keyring holds MAC key versions beside its other versions, encrypted by the KEK and rotated, flagged
-and retired as the others are. Create the keyring with a MAC algorithm, HMAC-SHA256 or HMAC-SHA512.
+and retired as the others are. Create the keyring with a MAC algorithm, see [MACs in a keyring](../signing.md#macs-in-a-keyring).
 A service that writes calls `mac_attached` on its `Encryptor`, and a service that reads calls
 `verify_with_mac`. The type that is authenticated implements `SignableType`, whose payload type
 separates one kind of message from another: a MAC over a job never verifies as a cache entry. The
@@ -96,15 +96,16 @@ services:
 | Cost | an HMAC in process | one KMS call to sign, none to verify |
 
 A webhook your customers verify, a release, and a record whose writer must be told apart from its
-readers are signatures. See [Publish content anyone can verify](./publish-verifiable.md), and
+readers are signatures. See [Publish a rate sheet or a release anyone can verify](./publish-verifiable.md), and
 [Protect the keyring record](../production/signed-records.md) for the keyring's own record.
 
 ## What to watch for
 
 - Nothing outside the payload type and the payload is authenticated. A message that must not be
   replayed carries a timestamp or a nonce, and a message for one recipient names it;
-- a process on 0.30 refuses a record that holds a MAC version, so move every process to 0.31 before
-  the keyring gets its first MAC version.
+- a process on a version that predates MACs refuses a record that holds a MAC version, so upgrade
+  every process that reads the keyring before it gets its first MAC version, see
+  [Readers before producers](../migrating-from-0.30.md#readers-before-producers).
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/mac.rs).

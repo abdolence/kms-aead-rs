@@ -10,8 +10,9 @@ a JSON document that lists public keys. See [Signatures and MACs](../signing.md)
 A bank publishes its exchange rates as a JSON document. The type that holds the document implements
 `SignableType`, which names its payload type, and is signed as `JsonEncoded::new(rates)`, which stands
 for the compact JSON of the value. The payload type is signed with the bytes, so a signature over
-the rates never verifies as another kind of document. Canonicalise the JSON before it is
-signed if anything serialises it again. To publish large files, sign one document that lists their
+the rates never verifies as another kind of document. If anything serialises the JSON again,
+canonicalise it before it is signed: write it in one fixed form, so that every serialiser produces
+the same bytes. To publish large files, sign one document that lists their
 SHA-256 digests instead of each file, and compare the digest of each downloaded file with its entry
 once the document verifies.
 
@@ -146,8 +147,10 @@ under it, which is the response to a compromised key. See
 - a signature has no expiry and the set has no revocation list. Put a version or a date in the
   document, such as the `date` of the rates, so that a verifier can refuse an old document that is
   still validly signed;
-- ECDSA signatures are malleable: never use signature bytes as an identifier;
-- the signature does not hide the document, see [Large files](./large-files.md) for the content.
+- ECDSA signatures are malleable, which means a third party can turn a valid signature into another
+  valid one for the same document: never use signature bytes as an identifier;
+- the signature does not hide the document, see
+  [Store customer uploads and serve byte ranges](./large-files.md) for the content.
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/signing.rs).
