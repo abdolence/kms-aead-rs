@@ -89,15 +89,7 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/asymmetric_kek.rs).
 
-The KMS rights per provider:
-
-| KMS | Reader | Administration, in addition |
-|---|---|---|
-| Google Cloud KMS | `cloudkms.cryptoKeyVersions.useToDecrypt` | `cloudkms.cryptoKeyVersions.viewPublicKey`, which `roles/cloudkms.cryptoKeyDecrypter` does not carry |
-| AWS KMS | `kms:Decrypt` on the key | `kms:GetPublicKey` on the key |
-| Azure Key Vault | `keys/unwrap/action` | `keys/get` |
-| Vault Transit | `update` on `transit/decrypt/<key>` | `read` on `transit/keys/<key>` |
-
+The KMS rights per provider are in [Under an asymmetric KEK](./production/permissions.md#under-an-asymmetric-kek).
 No side needs a KMS encrypt right. Be aware the KMS audit log does not show who encrypted a DEK:
 the encryption is a local operation. The decrypt log stays.
 
@@ -115,7 +107,7 @@ An `AsymmetricKekPublicKey` holds the key and what a reader needs to decrypt:
   Cloud KMS and Transit write it, or `Jwk` as Key Vault returns it. `Raw` has no meaning for an RSA
   key.
 
-The administration fetches it with the right of the table above, on the provider it holds:
+The administration fetches it with the read right of the public key, on the provider it holds:
 `GcpKmsProvider::public_key(&version)`, `AwsKmsProvider::public_key()`,
 `AzureKmsProvider::public_key(None)` for the latest version, `HcVaultTransitProvider::public_key(None)`
 and `LocalAsymmetricKmsProvider::public_key(None)`. Each reads the version from the KMS's response,

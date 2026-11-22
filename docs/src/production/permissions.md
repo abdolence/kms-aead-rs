@@ -1,7 +1,7 @@
 # Permissions: applications and administration
 
 Without a keyring, the principals that write values and the ones that only read them differ in
-their KMS rights, see [KMS rights](#with-kms-aead-alone). A keyring adds an administration side that
+their KMS rights, see [With kms-aead alone](#with-kms-aead-alone). A keyring adds an administration side that
 builds with another feature, calls another handle and writes the keyring store, and the sections
 below give each side its checklist and its rights.
 
@@ -44,7 +44,7 @@ application opens it:
   first request. Such an application enables `admin` and is given the administrative rights
   deliberately, and is then trusted as the administration is, see
   [Keyring limits](../security.md#keyring-limits) and
-  [A keyring per tenant](../use-cases/keyring-per-tenant.md#creating-the-keyrings).
+  [Creating the keyrings](../use-cases/keyring-per-tenant.md#creating-the-keyrings).
 
 An application's own tests that create keyrings in `MemoryKeyringStore` enable `admin` for the
 tests only:
@@ -147,7 +147,7 @@ Two built-in roles fall short of what the administration needs:
 - Azure's "Key Vault Crypto Service Encryption User" carries read, `wrap` and `unwrap` and no
   decrypt.
 
-The KMS audit log no longer shows who encrypted a DEK, since the encryption is local, and anyone
+The KMS audit log does not show who encrypted a DEK, since the encryption is local, and anyone
 holding the public key can encrypt one: a keyring under an asymmetric KEK runs with
 `RecordSignaturePolicy::Required` on every application, see
 [Keyrings under an asymmetric KEK](../asymmetric-kek.md#keyrings-under-an-asymmetric-kek). The

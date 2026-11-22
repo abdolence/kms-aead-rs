@@ -71,15 +71,19 @@ Two further providers are in every build and hold the public key:
 - `AsymmetricKekProvider` encrypts with the public key and decrypts through the KMS provider of the
   same KEK, for the keyring administration.
 
-The call that fetches the public key, and the rights of a reader and of the administration:
+The call that fetches the public key, on the provider the administration holds:
 
-| KMS | Public key | Reader | Administration, in addition |
-|---|---|---|---|
-| Google Cloud KMS | `GcpKmsProvider::public_key(&version)` | `cloudkms.cryptoKeyVersions.useToDecrypt`, as in `roles/cloudkms.cryptoKeyDecrypter` | `cloudkms.cryptoKeyVersions.viewPublicKey`, as in `roles/cloudkms.publicKeyViewer`. `roles/cloudkms.cryptoKeyDecrypter` does not carry it |
-| AWS KMS | `AwsKmsProvider::public_key()` | `kms:Decrypt` on the key | `kms:GetPublicKey` on the key |
-| Azure Key Vault | `AzureKmsProvider::public_key(None)` for the latest version, or `Some(&version)` | `keys/unwrap/action` | `keys/get`. "Key Vault Crypto Service Encryption User" carries read, `wrap` and `unwrap` and no decrypt |
-| Vault Transit | `HcVaultTransitProvider::public_key(None)` or `Some(&version)` | `update` on `transit/decrypt/<key>` | `read` on `transit/keys/<key>` or `transit/export/public-key/<key>` |
-| Local KMS | `LocalAsymmetricKmsProvider::public_key(None)` for its encrypting version | none | none |
+| KMS | Public key |
+|---|---|
+| Google Cloud KMS | `GcpKmsProvider::public_key(&version)` |
+| AWS KMS | `AwsKmsProvider::public_key()` |
+| Azure Key Vault | `AzureKmsProvider::public_key(None)` for the latest version, or `Some(&version)` |
+| Vault Transit | `HcVaultTransitProvider::public_key(None)` or `Some(&version)` |
+| Local KMS | `LocalAsymmetricKmsProvider::public_key(None)` for its encrypting version |
+
+The rights of a reader and of the administration are in [Under an asymmetric
+KEK](./production/permissions.md#under-an-asymmetric-kek), with the exact permissions of each KMS
+on its page above.
 
 `encrypts_with_public_key()` is `true` for `PublicKeyKekProvider`, `AsymmetricKekProvider` and
 `LocalAsymmetricKmsProvider`, so that a keyring refuses the BigQuery and Tink exports its KEK

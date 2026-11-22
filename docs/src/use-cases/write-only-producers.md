@@ -16,7 +16,7 @@ the KMS and decrypts them for the readers. See [Asymmetric KEKs](../asymmetric-k
 1. Create an RSA key for asymmetric decryption in the KMS, 3072 bits, with the algorithm
    RSA-OAEP SHA-256. Cloud KMS, AWS KMS, Azure Key Vault and Vault Transit offer it;
 2. grant the readers the decrypt right and the administration the right to read the public key,
-   see [the rights per KMS](../asymmetric-kek.md#producers-and-readers);
+   see [Under an asymmetric KEK](../production/permissions.md#under-an-asymmetric-kek);
 3. the administration fetches the public key on its provider, writes `to_json()` and the key's
    fingerprint to the producers' configuration;
 4. each producer builds a `PublicKeyKekProvider` from them and an envelope over it.

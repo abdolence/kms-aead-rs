@@ -1,9 +1,9 @@
 # Decrypt columns in BigQuery SQL or with Tink
 
 An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
-or Python needs to read values a Rust service wrote. Values the library writes are in Tink's
-formats, so Tink in another language and BigQuery's SQL read them, given the keys. Three routes lead
-there, and they differ in what the reader needs and in whether the key rotates:
+or Python needs to read values a Rust service wrote. Values the library writes are in the formats
+of Tink, Google's cryptography library, so Tink in another language and BigQuery's SQL read them,
+given the keys. Three routes lead there, and they differ in what the reader needs and in whether the key rotates:
 
 | | Envelope values | One fixed key | Keyring |
 |---|---|---|---|
@@ -36,7 +36,8 @@ can build:
 2. the administrative job exports the keyset, with `export_bigquery_keyset` under the
    `bigquery-export` feature or `export_tink_keyset` under `admin`, and writes its bytes where the
    query or the reader takes them;
-3. the job exports again:
+3. the job exports again. A `Readable` keyset holds every version of a purpose that decrypts and is
+   not compromised, and a `Single` keyset one version, as its primary key:
    - the `Readable` keysets after every `rotate`, before the promotion, and after every `retire`,
      every `mark_compromised` and every KEK rotation;
    - the `Single` keyset of a new deterministic version after its promotion, since a pending
