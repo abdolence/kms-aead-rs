@@ -61,7 +61,9 @@ this crate's API under the Firestore features.
 ### Storage layout
 
 The record of a keyring is the document `kms_keyrings/<keyring id>`, whose fields are those of the
-record's JSON. `with_collection` takes another collection than
+record's JSON. A `null` member is a field of Firestore's null type, so that the document reads back
+with the canonical digest that the record's signature covers. `with_collection` takes another
+collection than
 `FirestoreKeyringStore::DEFAULT_COLLECTION`, as firestore-rs's `FirestoreCollectionId`. A create fails when the document exists, and an
 update carries the update time it read as its precondition.
 

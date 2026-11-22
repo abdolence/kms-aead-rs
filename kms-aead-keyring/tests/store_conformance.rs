@@ -105,6 +105,17 @@ async fn a_created_record_loads_at_its_revision(store: impl KeyringStore) -> Tes
     Ok(())
 }
 
+/// A loaded record has the canonical digest of the written one, which a record signature covers:
+/// the store keeps every member of the document, `null` ones among them.
+async fn a_loaded_record_keeps_the_written_digest(store: impl KeyringStore) -> TestResult {
+    let id = unique_keyring_id()?;
+    let written = KeyringRecord::from_json(&id, &record(&id, 1)?.to_json()?)?;
+    written_revision(store.compare_and_swap(&written, None).await?)?;
+    let loaded = store.load(&id).await?.ok_or("the record is gone")?;
+    assert_eq!(loaded.record.canonical_digest(), written.canonical_digest());
+    Ok(())
+}
+
 async fn creating_an_existing_record_conflicts(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
     written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
@@ -404,10 +415,58 @@ async fn a_record_it_returns_takes_an_administrative_write<S: KeyringStore>(
     Ok(())
 }
 
+/// A record a signing admin creates opens in a fresh registry that requires a signature, and the
+/// admin's next write takes it.
+#[cfg(all(feature = "ring", feature = "admin"))]
+async fn a_signed_record_opens_where_a_signature_is_required<S: KeyringStore + Clone>(
+    store: S,
+) -> TestResult {
+    use std::sync::Arc;
+
+    use kms_aead::backends::Ring;
+    use kms_aead::providers::{
+        LocalKekId, LocalKmsProvider, LocalSigningKeyName, LocalSigningProvider,
+    };
+    use kms_aead::signing::{Signer, SigningAlgorithm, VerifyingKeySet};
+    use kms_aead_keyring::{
+        KeyringAlgorithms, KeyringRegistry, KeyringRegistryOptions, Purpose, RecordSignaturePolicy,
+    };
+
+    let provider = Arc::new(LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from(
+        "conformance-kek".to_string(),
+    )?)?);
+    let signer = Signer::<_, Ring>::new(LocalSigningProvider::<Ring>::ephemeral(
+        LocalSigningKeyName::try_from("conformance-records".to_string())?,
+        SigningAlgorithm::Ed25519,
+    )?)
+    .await?;
+    let required = KeyringRegistryOptions::new()
+        .with_watch(false)
+        .with_record_signatures(RecordSignaturePolicy::Required(VerifyingKeySet::new([
+            signer.verifying_key().clone(),
+        ])?));
+    let id = unique_keyring_id()?;
+    let admin = KeyringRegistry::<S, Ring>::new(store.clone(), required.clone())?
+        .create_signed(
+            Arc::clone(&provider),
+            signer,
+            id.clone(),
+            KeyringAlgorithms::new(),
+        )
+        .await?;
+
+    KeyringRegistry::<S, Ring>::new(store, required)?
+        .open(provider, id)
+        .await?;
+    admin.rotate(Purpose::Randomized).await?;
+    Ok(())
+}
+
 /// Runs every check, each against a store `new_store` returns.
-async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
+async fn conformance<S: KeyringStore + Clone>(new_store: impl Fn() -> S) -> TestResult {
     an_absent_record_loads_as_none(new_store()).await?;
     a_created_record_loads_at_its_revision(new_store()).await?;
+    a_loaded_record_keeps_the_written_digest(new_store()).await?;
     creating_an_existing_record_conflicts(new_store()).await?;
     an_update_at_the_current_revision_writes_a_new_one(new_store()).await?;
     an_update_at_a_stale_revision_conflicts(new_store()).await?;
@@ -423,6 +482,8 @@ async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     a_delete_signals_the_watch_of_its_record(new_store()).await?;
     #[cfg(all(feature = "ring", feature = "admin"))]
     a_record_it_returns_takes_an_administrative_write(new_store()).await?;
+    #[cfg(all(feature = "ring", feature = "admin"))]
+    a_signed_record_opens_where_a_signature_is_required(new_store()).await?;
     Ok(())
 }
 
