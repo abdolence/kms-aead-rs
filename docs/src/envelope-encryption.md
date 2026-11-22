@@ -2,7 +2,12 @@
 
 `KmsAeadEnvelope` encrypts values under data encryption keys (DEKs) on the crypto backend it is
 built with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
-`async`, and every call opens one `DEBUG` span, see [Observability](./observability/spans-and-events.md).
+`async`, and every call opens one `DEBUG` span, see [Spans and events](./observability/spans-and-events.md).
+
+This page specifies the calls of `KmsAeadEnvelope`. To encrypt the columns of a table, read
+[Encrypt personal data and secrets in your database](./use-cases/encrypt-fields.md). To make fewer
+KMS calls, read [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md). To
+rotate the KEK, read [Rotate keys and re-encrypt values](./production/rotation.md).
 
 ```rust
 use kms_aead::backends::Ring;
@@ -29,10 +34,10 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 
 The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
-[Crypto backends](./crypto-backends.md). The default, AES-256-GCM, is read by every Tink
-implementation too, see [Formats](./formats/values.md#tinks-kms-envelope). Values that 0.29 and earlier
-encrypted under their default decrypt only with ChaCha20-Poly1305 configured, see
-[Migrating from 0.29](./migrating-from-0.29.md#default-algorithm).
+[Crypto backends](./crypto-backends.md). The default, AES-256-GCM, is read by every
+implementation of Tink, Google's cryptography library, too, see [Tink's KMS envelope](./formats/values.md#tinks-kms-envelope). Values that
+an older release encrypted under another default are covered by [Default
+algorithm](./migrating-from-0.29.md#default-algorithm).
 
 Over a provider that only encrypts, such as the `PublicKeyKekProvider` of a producer, the envelope
 has the calls that encrypt: `encrypt`, `encrypt_with_dek` and the `generate_encrypted_*` calls.
@@ -77,9 +82,9 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 The bytes in and out of an `Encrypted` are in [Stored values](./stored-values.md#bytes-in-and-out).
 
 The value is in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads
-it with the same KMS key and algorithm, see [Formats](./formats/values.md#tinks-kms-envelope).
+it with the same KMS key and algorithm, see [Tink's KMS envelope](./formats/values.md#tinks-kms-envelope).
 
-A new DEK comes from the backend's CSPRNG, or from the KMS generator when the provider is
+A new DEK comes from the backend's CSPRNG (cryptographically secure random number generator), or from the KMS generator when the provider is
 configured to use one, see [KMS random generators](./providers.md#kms-random-generators).
 
 ## Typed fields
@@ -147,8 +152,8 @@ The calls are:
 - `encrypt_with_encrypted_dek` and `decrypt_with_encrypted_dek`: with an encrypted DEK, decrypted
   through the envelope's DEK cache, so one KMS call per call without a cache.
 
-Be aware not to encrypt more than about 2^32 values under one DEK: every value takes a random 96-bit
-nonce, see [Security considerations](./security.md#nonces).
+Be aware of the number of values one DEK encrypts: every value takes a random 96-bit nonce, which
+bounds the count, see [Nonces](./security.md#nonces).
 
 ## Storing encrypted DEKs
 
@@ -193,20 +198,20 @@ KEK that encrypted it, as the KMS reported it. It is `None` under AWS KMS, whose
 names no key material, and wherever the KMS reported no version. Decryption never needs it, and neither
 `value()` nor `to_hex_string()` holds it, so an encrypted DEK read back from them has none. Stored
 beside the encrypted DEK, it shows without a KMS call which DEKs are still under an old KEK
-version, see [The check](./production/reencrypt-deks.md#the-check). `with_kek_version` puts it back on the encrypted DEK read
-from the bytes.
+version, see [The check](./production/reencrypt-deks.md#the-check). `with_kek_version` puts it back
+on the encrypted DEK read from the bytes.
 
 Equality and hashing take the bytes alone, so an encrypted DEK read back without its KEK version is
 the same key, to the DEK cache and in a map, as the one the provider returned with it.
 
 The encrypted DEK is the one Tink stores in its KMS envelope, so `Encrypted::join` of a bare value
 and its encrypted DEK is an `Encrypted<T, Envelope>` that Tink reads. See
-[Formats](./formats/values.md#encrypted-deks) for each provider's bytes.
+[Encrypted DEKs](./formats/values.md#encrypted-deks) for each provider's bytes.
 
 ## Re-encrypting DEKs
 
 After a KEK rotation, a DEK stored before it keeps decrypting with the old KEK version only. Two
-calls move a stored DEK to the version the provider encrypts with now, without decrypting any value:
+calls move a stored DEK to the version the provider encrypts with, without decrypting any value:
 
 - `reencrypt_dek` takes an `Encrypted<T, Envelope>` and returns it with its DEK under the current
   version;
@@ -215,8 +220,8 @@ calls move a stored DEK to the version the provider encrypts with now, without d
   fields, and for a DEK that many values share.
 
 Each call makes two KMS calls, a decryption and an encryption, and never goes through the DEK
-cache. A value or a DEK in a layout of 0.29 or earlier fails with `LEGACY_FORMAT`:
-`upgrade_legacy_value` and `upgrade_legacy_encrypted_dek` rewrite it in Tink's format, see
+cache. A value or a DEK in a legacy layout fails with `LEGACY_FORMAT`: `upgrade_legacy_value` and
+`upgrade_legacy_encrypted_dek` rewrite it in Tink's format, see
 [Upgrading stored values](./migrating-from-0.29.md#upgrading-stored-values).
 
 The order of a rotation, the sweep, the checks around the disable of the old version and the

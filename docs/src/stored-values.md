@@ -1,6 +1,11 @@
 # Stored values
 
-Three types carry what the library writes to a data store and reads back:
+This page specifies the types that carry what the library writes to a data store and reads back,
+and how they are stored. To encrypt the columns of a table, start with [Encrypt personal data and
+secrets in your database](./use-cases/encrypt-fields.md). The bytes of each layout are in
+[Values and DEKs](./formats/values.md).
+
+Three types are involved:
 
 - `Encrypted<T, F>`: an encrypted value that decrypts to a `T`, in the layout of the format `F`;
 - `Beacon<T>`: a blind index of a `T`, stored beside its encrypted value for lookups;
@@ -15,15 +20,16 @@ to store.
 Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
 `kms_aead::formats` and fixes the layout of the bytes:
 
-| Format | Layout | Written by | Read by | `key_id()` | Equality |
+| Format | Holds | Written by | Read by | `key_id()` | Equality |
 |---|---|---|---|---|---|
-| `Envelope` | [Tink's KMS envelope](./formats/values.md#tinks-kms-envelope), the encrypted DEK inside | `KmsAeadEnvelope::encrypt` | `KmsAeadEnvelope::decrypt` | no | none |
-| `Bare` | `[nonce: 12][ciphertext][tag: 16]` | `KmsAeadEnvelope::encrypt_with_dek`, `AeadCipher::encrypt_bare` | `KmsAeadEnvelope::decrypt_with_dek`, `AeadCipher::decrypt_bare` | no | none |
-| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | `AeadCipher::encrypt`, `Encryptor::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
-| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | `DeterministicCipher::encrypt`, `Encryptor::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
+| `Envelope` | the value and its encrypted DEK, in [Tink's KMS envelope](./formats/values.md#tinks-kms-envelope) | `KmsAeadEnvelope::encrypt` | `KmsAeadEnvelope::decrypt` | no | none |
+| `Bare` | the AEAD output alone | `KmsAeadEnvelope::encrypt_with_dek`, `AeadCipher::encrypt_bare` | `KmsAeadEnvelope::decrypt_with_dek`, `AeadCipher::decrypt_bare` | no | none |
+| `Randomized` | the AEAD output after a key id | `AeadCipher::encrypt`, `Encryptor::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
+| `Deterministic` | the AES-SIV output after a key id | `DeterministicCipher::encrypt`, `Encryptor::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
 
-- `key_id()` returns the `KeyId` that the TINK prefix names, the key to decrypt the value with. The
-  prefix is not authenticated: a changed key id fails to decrypt;
+- `key_id()` returns the `KeyId` that the Tink output prefix names, the key to decrypt the value
+  with. The prefix is the byte `0x01` and the key id, at the start of the value. It is not
+  authenticated: a changed key id fails to decrypt;
 - an `Envelope` value carries its encrypted DEK instead of a key id, and a `Bare` value names no
   key: the application keeps track of the key that decrypts it;
 - the randomised formats encrypt equal plaintexts into different values, so they have no `==`.
@@ -32,8 +38,9 @@ Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
   what a lookup by the encrypted value needs, see [Deterministic encryption](./deterministic.md);
 - `Debug` shows the length only.
 
-See [Formats of `Encrypted`](./formats/values.md#formats-of-encrypted) for the shortest value of each
-layout and the layouts of 0.29 and earlier.
+See [Formats of `Encrypted`](./formats/values.md#formats-of-encrypted) for the layout and the shortest
+value of each format, and [Values written by 0.29 and
+earlier](./migrating-from-0.29.md#values-written-by-029-and-earlier) for the legacy layouts.
 
 ### Bytes in and out
 
@@ -42,8 +49,8 @@ lowercase hex. The only ways back are `Encrypted::try_from` for bytes and
 `Encrypted::try_from_hex_string` for hex in either case. Both check the bytes against the layout
 of `F` before any KMS call, so a truncated or foreign value fails when it is read, with
 `INVALID_CIPHER_TEXT_FORMAT`, `UNKNOWN_CIPHER_TEXT_LAYOUT`, `INVALID_HEX`, or `LEGACY_FORMAT` for
-a layout of 0.29 or earlier without the `legacy-formats` feature. The check reads the framing
-only: a changed value fails to decrypt with `DECRYPT`.
+a legacy layout without the `legacy-formats` feature. The check reads the framing only: a changed
+value fails to decrypt with `DECRYPT`.
 
 ```rust
 use kms_aead::backends::Ring;
@@ -197,17 +204,13 @@ the value travels as text.
 
 A beacon, or blind index, is a truncated HMAC-SHA256 of a `T`'s plaintext under a beacon key. It is
 stored beside the field's encrypted value, which stays randomised, and a data store matches it
-by equality without the plaintext or a decryption:
+by equality without the plaintext or a decryption. The bytes are `0x01`, the key id and the
+truncated HMAC, see [Beacons](./formats/values.md#beacons).
 
-```text
-[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
-```
-
-- `0x01` is the version of the beacon layout;
 - `key_id()` returns the `KeyId` of the beacon key that calculated it, so that a column holds
   beacons of two keys during a re-index;
-- `BeaconBits` sets how many bits of the HMAC a beacon keeps, 1 to 256, `BeaconBits::DEFAULT`,
-  16, unless set. `BeaconBits::new` returns `None` outside that range;
+- `BeaconBits` sets how many bits of the HMAC a beacon keeps, see [Bits](./beacons.md#bits).
+  `BeaconBits::new` returns `None` outside the range;
 - `value()` and `into_value()` return the bytes to store, and `Beacon::try_from` reads them back,
   failing with `INVALID_BEACON_FORMAT` on bytes of another layout;
 - `==` and `Hash` compare the bytes, `==` in constant time, and `Debug` shows the key id only.
@@ -244,8 +247,6 @@ assert_eq!(read_back, beacon);
 # }
 ```
 
-The bits trade lookups against leakage, see [Bits](./beacons.md#bits).
-
 `Beacon<T>` is stored as `Encrypted` is, as bytes, with serde and the `postgres` and `sqlx`
 features. A lookup matches the column by equality, so it gets an ordinary index:
 
@@ -279,7 +280,8 @@ async fn candidates(
 
 See [Beacons](./beacons.md) for calculating beacons with a KMS-encrypted beacon key, the context,
 normalisation and key rotation, and [Beacons](./keyring/beacons.md) in kms-aead-keyring for
-beacons under key versions.
+beacons under key versions. [Find a user by an encrypted email](./use-cases/equality-lookups.md) puts
+them to use.
 
 ## `Plaintext`
 
@@ -406,9 +408,10 @@ assert_eq!(decrypted, address);
 A plaintext that is not the JSON of its type, such as a record written by an older version of the
 application, fails with `INVALID_PLAINTEXT` and logs a `WARN` event with an outline of the JSON.
 By default the outline shows the shape: the type of every value, the nesting, and where serde_json
-stopped reading, with no value and no length, since [a length gives away a hidden
+stopped reading. It shows no value and no length, since [a length gives away a hidden
 boolean](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES).
-Finding the field that changed takes more, and a type opts into it with a policy, the second type
+
+Finding the field that changed takes more. A type opts into it with a policy, the second type
 parameter of `JsonEncoded`: a type of the application's own that implements
 [`JsonRedaction`](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html) and
 sets the constants it needs. [Redaction policies](#redaction-policies) lists what each shows and
@@ -464,9 +467,9 @@ The outline names the field and the value that differs, and shows the length of 
 nothing else of it. A plaintext is encrypted because it is secret, so a policy reveals codes and
 identifiers only. A revealed value goes to the logs whenever the JSON does not decode: never reveal
 personal data. `kms_aead::json=off` in an `EnvFilter` turns the event off. The event's fields are
-in [Observability](./observability/spans-and-events.md#json-that-does-not-decode). `RedactedJson` outlines any JSON
-the same way, with no encryption, see
-[Log JSON payloads without leaking data](./use-cases/log-json-payloads.md).
+in [Spans and events](./observability/spans-and-events.md#json-that-does-not-decode). `RedactedJson`
+outlines any JSON the same way, with no encryption, see
+[Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md).
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/encrypted_json.rs).
